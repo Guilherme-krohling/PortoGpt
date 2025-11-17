@@ -1,0 +1,22 @@
+# Pasta do Ambiente Virtual
+# Esta é a linha mais importante!
+venv/
+.venv/
+
+# Arquivo de Segredos
+# Nunca envie sua API key para o Git
+.env
+.env.*
+
+# Cache do Python
+__pycache__/
+*.pyc
+*.py[cod]
+
+# Pasta de configurações do VSCode
+.vscode/
+
+# Pasta de dados (seus PDFs)
+# Adicione se você NÃO quiser salvar os PDFs no Git.
+# Se você QUISER salvar os PDFs, apague a linha abaixo.
+data/
