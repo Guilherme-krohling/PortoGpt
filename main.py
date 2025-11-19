@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Imports do LlamaIndex
@@ -14,6 +15,15 @@ from llama_index.core import (
 
 # 1. Configuração Inicial da Aplicação
 app = FastAPI(title="PortoGpt API")
+
+# --- 2. BLOCO NOVO: Configurar CORS --- Isso permite que o React converse com o Python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Em produção, trocaremos "*" pelo domínio do site real
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Variável global para guardar o "cérebro" da IA
 query_engine = None
