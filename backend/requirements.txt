@@ -21,3 +21,10 @@ torch
 #API server
 fastapi
 uvicorn
+
+# Banco de Dados Vetorial
+chromadb
+llama-index-vector-stores-chroma
+
+#biblioteca nova para o Reranking (que ajuda o robô a escolher os melhores trechos do PDF)
+llama-index-postprocessor-colbert-rerank

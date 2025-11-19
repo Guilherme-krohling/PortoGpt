@@ -1,22 +1,48 @@
-# Pasta do Ambiente Virtual
-# Esta é a linha mais importante!
-venv/
-.venv/
+# ========================
+# ARQUIVOS DE SISTEMA / IDE
+# ========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
 
-# Arquivo de Segredos
-# Nunca envie sua API key para o Git
-.env
-.env.*
+# ========================
+# BACKEND (PYTHON)
+# ========================
+# Ambiente Virtual (Onde instalamos as libs)
+backend/venv/
+backend/.venv/
 
-# Cache do Python
-__pycache__/
-*.pyc
+# Bytecode compilado (Arquivos temporários do Python)
+backend/__pycache__/
 *.py[cod]
 
-# Pasta de configurações do VSCode
-.vscode/
+# Variáveis de Ambiente (SENHAS - Nunca enviar!)
+backend/.env
+backend/.env.*
 
-# Pasta de dados (seus PDFs)
-# Adicione se você NÃO quiser salvar os PDFs no Git.
-# Se você QUISER salvar os PDFs, apague a linha abaixo.
-data/
+# Banco de Dados Vetorial (Gerado pelo ingest.py)
+# É pesado e gerado localmente, não deve ir para o git
+backend/chroma_db/
+
+# Dados (PDFs)
+# Se quiser salvar os PDFs no Git, apague a linha abaixo.
+# Se forem muitos ou pesados, mantenha ignorado.
+backend/data/
+
+# ========================
+# FRONTEND (REACT/NODE)
+# ========================
+# Dependências do Node (Isso aqui tem 200mb+, JAMAIS envie)
+frontend/node_modules/
+
+# Pasta de Build (Gerada quando for colocar no ar)
+frontend/dist/
+
+# Logs de erro do npm
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# Arquivos de ambiente local do frontend
+frontend/.env.local

@@ -18,16 +18,22 @@ function App() {
     if (!input.trim()) return;
 
     const userMessage = { role: 'user', text: input };
+
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setLoading(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/query', {
+      // Agora batendo na rota certa (/chat) com o corpo certo (query)
+      const response = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: userMessage.text }),
+        body: JSON.stringify({ query: userMessage.text }), // <--- AQUI ESTAVA O ERRO
       });
+
+      if (!response.ok) {
+        throw new Error(`Erro na API: ${response.status}`);
+      }
 
       const data = await response.json();
       const aiMessage = { role: 'assistant', text: data.response };
@@ -78,7 +84,7 @@ function App() {
         {/* 3. LOGIN / TOPO */}
         <header className="top-bar">
           <div className="model-selector">
-            PortoGpt 1.0 
+            PortoGpt 1.0
           </div>
           <div className="user-profile">
             <div className="user-avatar">G</div>
@@ -121,8 +127,8 @@ function App() {
         {/* 5. INPUT (EMBAIXO) */}
         <div className="input-container">
           <div className="input-box">
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={handleKeyPress}
