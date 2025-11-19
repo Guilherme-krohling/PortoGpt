@@ -17,3 +17,7 @@ llama-index-readers-file
 llama-index-embeddings-huggingface
 sentence-transformers
 torch
+
+#API server
+fastapi
+uvicorn
