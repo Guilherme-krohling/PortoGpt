@@ -1,11 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
 import './App.css'
+import ReactMarkdown from 'react-markdown'
+import $ from 'jquery'
 
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [file, setFile] = useState(false);
   const chatContainerRef = useRef(null);
+  const fileInput = useRef(null);
 
   // Rola para o final sempre que chega mensagem nova
   useEffect(() => {
@@ -13,6 +17,9 @@ function App() {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [messages, loading]);
+  useEffect(() => {
+    $('#modalUpload').hide();
+  }, [])
 
   const sendMessage = async () => {
     if (!input.trim()) return;
@@ -21,30 +28,10 @@ function App() {
 
     setMessages(prev => [...prev, userMessage]);
     setInput('');
-    setLoading(true);
-
-    try {
-      // Agora batendo na rota certa (/chat) com o corpo certo (query)
-      const response = await fetch('http://localhost:8000/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: userMessage.text }), // <--- AQUI ESTAVA O ERRO
-      });
-
-      if (!response.ok) {
-        throw new Error(`Erro na API: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const aiMessage = { role: 'assistant', text: data.response };
-      setMessages(prev => [...prev, aiMessage]);
-
-    } catch (error) {
-      console.error("Erro:", error);
-      setMessages(prev => [...prev, { role: 'assistant', text: "Erro ao conectar com o servidor." }]);
-    } finally {
-      setLoading(false);
-    }
+    const returnData = await request('/chat', JSON.stringify({ query: userMessage.text }),
+      {'Content-type':'application/json'});
+    const aiMessage = { role: 'assistant', text: returnData.response };
+    setMessages(prev => [...prev, aiMessage]);
   };
 
   const handleKeyPress = (e) => {
@@ -54,6 +41,46 @@ function App() {
   const handleNewChat = () => {
     setMessages([]);
     setInput('');
+  }
+
+  const uploadFile = () => {
+    $(fileInput.current).off("change").on("change", function () {
+      setFile(fileInput.current.files?.[0]);
+      $('#modalUpload').show();
+    });
+    fileInput.current.click();
+  }
+
+  const finishUpload = async () => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const returnData = await request('/upload', formData, {});
+    setMessages(prev => [...prev, { role: 'assistant', text: returnData.response}])
+    $('#modalUpload').hide();
+  }
+
+  async function request(endpoint, bodyObject, headers) {
+    setLoading(true);
+
+    try {
+      const response = await fetch('http://localhost:8000/api' + endpoint, {
+        method: 'POST',
+        headers: headers,
+        body: bodyObject,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Erro na API: ${response.status}`);
+      }
+      const data = await response.json();
+      console.log(data);
+      return data;
+    } catch (error) {
+      console.error("Erro:", error);
+      setMessages(prev => [...prev, { role: 'assistant', text: "Erro ao conectar com o servidor." }]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -87,7 +114,7 @@ function App() {
             PortoGpt 1.0
           </div>
           <div className="user-profile">
-            <div className="user-avatar">G</div>
+            <div className="user-avatar">N</div>
           </div>
         </header>
 
@@ -95,7 +122,7 @@ function App() {
         <div className="chat-area" ref={chatContainerRef}>
           {messages.length === 0 ? (
             <div className="welcome-screen">
-              <h1>Olá, Guilherme</h1>
+              <h1>Olá, Nickolas</h1>
               <p>Como posso ajudar com os dados portuários hoje?</p>
             </div>
           ) : (
@@ -104,10 +131,13 @@ function App() {
                 <div key={index} className={`message-row ${msg.role}`}>
                   <div className="message-content">
                     <div className="message-icon">
-                      {msg.role === 'assistant' ? '🤖' : 'G'}
+                      {msg.role === 'assistant' ? '🤖' : 'N'}
                     </div>
                     <div className="message-text">
-                      {msg.text}
+                      {msg.role === 'assistant'
+                        ? <ReactMarkdown>{msg.text}</ReactMarkdown>
+                        : msg.text
+                      }
                     </div>
                   </div>
                 </div>
@@ -135,7 +165,11 @@ function App() {
               placeholder="Digite sua pergunta aqui..."
               disabled={loading}
             />
-            <button onClick={sendMessage} disabled={loading || !input.trim()}>
+            <input type="file" ref={fileInput} style={{ display: 'none' }} />
+            <button title='Fazer upload de arquivo .pdf' onClick={uploadFile} disabled={loading}>
+              📤
+            </button>
+            <button title='Enviar Mensagem' onClick={sendMessage} disabled={loading || !input.trim()}>
               ➤
             </button>
           </div>
@@ -144,6 +178,15 @@ function App() {
           </p>
         </div>
       </main>
+      <div id='modalUpload' className='overlay'>
+        <div className='modal'>
+          Deseja fazer o upload do arquivo {file?.name}?
+          <div className="confirm-row">
+            <button onClick={finishUpload}>Sim</button>
+            <button onClick={() => $('#modalUpload').hide()}>Não</button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

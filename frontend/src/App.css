@@ -260,11 +260,12 @@ button {
   background: transparent;
   border: none;
   cursor: pointer;
-  font-size: 20px;
+  font-size: 22px;
   color: #444746;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0.2em;
 }
 
 button:hover {
@@ -272,12 +273,44 @@ button:hover {
 }
 
 button:disabled {
-  color: #ccc;
+  opacity: 0.5;
   cursor: default;
+}
+
+button:focus, button:focus-visible {
+    outline: none;
+    background: linear-gradient(to right, #4285f452, #d9657082);;
+    border-radius: 1em;
 }
 
 .disclaimer {
   font-size: 11px;
   color: #444746;
   margin-top: 10px;
+}
+
+.overlay{
+  position: fixed;
+  top:0;
+  left:0;
+  width:100%;
+  height:100%;
+  background: rgba(0,0,0,0.5);
+  z-index: 11;
+
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
+
+.modal{
+  background:white;
+  padding:30px;
+  border-radius:10px;
+  min-width:300px;
+}
+
+.confirm-row{
+  display: flex;
+  justify-content: center;
 }
