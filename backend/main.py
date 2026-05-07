@@ -3,7 +3,7 @@ import chromadb
 import ingest
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi import BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import json as json_module
+import time
 from typing import Optional
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -257,6 +259,28 @@ def rebuild_index(file_paths=None):
     except Exception as e:
         print(f"Erro ao reconstruir índice: {e}")
 
+
+def is_missing_chroma_collection_error(error: Exception) -> bool:
+    """Identifica referência quebrada para uma collection antiga do ChromaDB."""
+    message = str(error).lower()
+    return "collection" in message and ("does not exist" in message or "not found" in message)
+
+
+def ensure_chat_engine():
+    """Garante que o motor de chat esteja carregado com a collection atual."""
+    global chat_engine
+    if chat_engine is not None:
+        return chat_engine
+
+    active_docs = [doc for doc in database.listar_documentos() if doc.get("active")]
+    if not active_docs:
+        raise HTTPException(status_code=503, detail="Nenhum PDF ativo está disponível para consulta.")
+
+    rebuild_index()
+    if chat_engine is None:
+        carregar_chat_engine()
+    return chat_engine
+
 # ==========================================
 # INICIALIZAÇÃO (Startup)
 # ==========================================
@@ -450,9 +474,6 @@ def update_ai_settings_endpoint(request: AISettingsRequest, admin_user=Depends(r
 def chat_endpoint(request: ChatRequest):
     global chat_engine
     
-    if chat_engine is None:
-        raise HTTPException(status_code=503, detail="O sistema ainda está iniciando ou falhou. Verifique os logs.")
-    
     # Verificar se usuário existe
     user = database.obter_usuario(request.user_id)
     if user is None:
@@ -460,7 +481,16 @@ def chat_endpoint(request: ChatRequest):
     
     try:
         # O chat_engine gerencia o histórico automaticamente
-        response = chat_engine.chat(request.query)
+        engine = ensure_chat_engine()
+        try:
+            response = engine.chat(request.query)
+        except Exception as e:
+            if not is_missing_chroma_collection_error(e):
+                raise
+            print("Collection vetorial antiga detectada. Reindexando base ativa e tentando novamente...")
+            chat_engine = None
+            rebuild_index()
+            response = ensure_chat_engine().chat(request.query)
         response_text = str(response)
         
         # Salvar no banco de dados
@@ -475,6 +505,52 @@ def chat_endpoint(request: ChatRequest):
     except Exception as e:
         print(f"Erro na geração da resposta: {e}")
         raise HTTPException(status_code=500, detail="Ocorreu um erro interno ao processar sua pergunta.")
+
+
+@app.post("/api/chat/stream")
+def chat_stream_endpoint(request: ChatRequest):
+    """Gera resposta e envia o texto em pequenos blocos para efeito de streaming."""
+    global chat_engine
+
+    user = database.obter_usuario(request.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    def emit_event(event: dict):
+        return f"{json_module.dumps(event, ensure_ascii=False)}\n"
+
+    def stream_response():
+        global chat_engine
+        try:
+            engine = ensure_chat_engine()
+            try:
+                response = engine.chat(request.query)
+            except Exception as e:
+                if not is_missing_chroma_collection_error(e):
+                    raise
+                print("Collection vetorial antiga detectada. Reindexando base ativa e tentando novamente...")
+                chat_engine = None
+                rebuild_index()
+                response = ensure_chat_engine().chat(request.query)
+
+            response_text = str(response)
+            save_result = database.salvar_mensagem(
+                request.user_id,
+                request.query,
+                response_text,
+                session_id=request.session_id,
+            )
+
+            for index in range(0, len(response_text), 8):
+                yield emit_event({"type": "chunk", "text": response_text[index:index + 8]})
+                time.sleep(0.055)
+
+            yield emit_event({"type": "done", "session_id": save_result.get("session_id")})
+        except Exception as e:
+            print(f"Erro na geração da resposta em streaming: {e}")
+            yield emit_event({"type": "error", "message": "Ocorreu um erro interno ao processar sua pergunta."})
+
+    return StreamingResponse(stream_response(), media_type="application/x-ndjson; charset=utf-8")
 
 
 @app.get("/api/chat/sessions/{user_id}")
