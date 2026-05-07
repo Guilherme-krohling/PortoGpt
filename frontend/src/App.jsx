@@ -191,6 +191,7 @@ function App() {
         <ChatSidebar
           currentUser={currentUser}
           activeSessionId={activeSessionId}
+          theme={theme}
           collapsed={sidebarCollapsed}
           refreshKey={historyRefreshKey}
           onNewChat={startNewChat}
@@ -294,7 +295,7 @@ function LoginPage({ onLogin, theme, onToggleTheme }) {
       <section className="login-card">
         <div className="brand-lockup">
           <span className="brand-mark">
-            <img className="brand-logo" src="/portogpt.svg" alt="" aria-hidden="true" />
+            <img className="brand-logo" src={theme === 'dark' ? '/logo-white.svg' : '/logo-dark.svg'} alt="" aria-hidden="true" />
             <PanelLeftOpen className="brand-open-icon" size={18} />
           </span>
           <span className="brand-copy">
@@ -352,6 +353,7 @@ function LoginPage({ onLogin, theme, onToggleTheme }) {
 
 function ChatSidebar({
   activeSessionId,
+  theme,
   collapsed,
   currentUser,
   onHistoryChange,
@@ -427,7 +429,7 @@ function ChatSidebar({
           title={collapsed ? 'Abrir barra lateral' : 'PortoGPT'}
         >
           <span className="brand-mark">
-            <img className="brand-logo" src="/portogpt.svg" alt="" aria-hidden="true" />
+            <img className="brand-logo" src={theme === 'dark' ? '/logo-dark.svg' : '/logo-white.svg'} alt="" aria-hidden="true" />
             <PanelLeftOpen className="brand-open-icon" size={18} />
           </span>
           <span className="brand-copy">
@@ -523,7 +525,6 @@ function TopBar({
     <header className="top-bar">
       <div className="top-left">
         <button className="model-selector" onClick={() => onNavigate('/')}>
-          <img className="topbar-logo" src="/portogpt.svg" alt="" aria-hidden="true" />
           PortoGpt 1.0
           <ChevronDown size={17} />
         </button>
