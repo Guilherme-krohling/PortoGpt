@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 import chromadb
 from dotenv import load_dotenv
@@ -8,6 +9,12 @@ from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageCon
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
+COLLECTION_NAME = "portogpt_collection"
 
 def processar_documentos(documents):
     print("🚀 Iniciando ingestão de dados...")
@@ -26,7 +33,7 @@ def processar_documentos(documents):
     # 3. Configurar o Banco de Dados (ChromaDB)
     # Ele vai criar uma pasta 'chroma_db' DENTRO da pasta backend
     print("⚙️ Configurando banco de dados...")
-    chroma_collection = buscar_collection()
+    chroma_collection = buscar_collection(reset=True)
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
@@ -40,13 +47,31 @@ def processar_documentos(documents):
     
     print("✅ Sucesso! Índice salvo na pasta './chroma_db'.")
 
-def buscar_collection():
+def buscar_collection(reset=False):
     DB_DIR = Path(__file__).resolve().parent / "chroma_db"
-    if not os.path.exists(DB_DIR):
-        raise FileNotFoundError
-    db_client = chromadb.PersistentClient(path=DB_DIR)
+    # Criar a pasta se não existir
+    os.makedirs(DB_DIR, exist_ok=True)
+    db_client = chromadb.PersistentClient(path=str(DB_DIR))
+    if reset:
+        try:
+            db_client.delete_collection(COLLECTION_NAME)
+            print("Coleção vetorial anterior removida.")
+        except Exception:
+            pass
     print(db_client.list_collections())
-    return db_client.get_or_create_collection("portogpt_collection")
+    return db_client.get_or_create_collection(COLLECTION_NAME)
+
+
+def limpar_collection():
+    DB_DIR = Path(__file__).resolve().parent / "chroma_db"
+    os.makedirs(DB_DIR, exist_ok=True)
+    db_client = chromadb.PersistentClient(path=str(DB_DIR))
+    try:
+        db_client.delete_collection(COLLECTION_NAME)
+    except Exception:
+        pass
+    db_client.get_or_create_collection(COLLECTION_NAME)
+    print("Coleção vetorial limpa. Nenhum documento ativo foi indexado.")
 
 def ler_diretorio(files=None, pasta=None):
     try:
@@ -67,10 +92,30 @@ def upload_arquivo(file):
 
 
 if __name__ == "__main__":
-    print("📂 Lendo documentos da pasta 'data'...")
+    print("📂 Lendo documentos da base ativa...")
     DIR = Path(__file__).resolve().parent / "data"
     if not os.path.exists(DIR):
         print("❌ Pasta 'data' não encontrada dentro de backend!")
         raise Exception
-    documents = ler_diretorio(pasta=DIR)
+
+    args = [arg for arg in sys.argv[1:] if arg != "--empty"]
+    if "--empty" in sys.argv:
+        limpar_collection()
+        sys.exit(0)
+
+    if not args:
+        try:
+            import database
+
+            database.init_db()
+            database.sync_documents_from_disk(DIR)
+            args = [str(DIR / doc["filename"]) for doc in database.listar_documentos() if doc.get("active")]
+        except Exception as e:
+            print(f"Não foi possível ler documentos ativos do SQLite: {e}")
+
+    if not args:
+        limpar_collection()
+        sys.exit(0)
+
+    documents = ler_diretorio(files=args)
     processar_documentos(documents)

@@ -47,3 +47,25 @@ frontend/yarn-error.log*
 
 # Arquivos de ambiente local do frontend
 frontend/.env.local
+
+# ambiente virtual python
+.venv/
+venv/
+
+# cache python
+__pycache__/
+*.pyc
+
+# vscode
+.vscode/
+
+# variaveis de ambiente
+.env
+
+# ========================
+# ARQUIVOS GERADOS (NÃO COMMITAR)
+# ========================
+*.log
+*.db
+*.sqlite
+*.sqlite3
