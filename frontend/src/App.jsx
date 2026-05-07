@@ -167,7 +167,7 @@ function App() {
             />
             <input type="file" ref={fileInput} style={{ display: 'none' }} />
             <button title='Fazer upload de arquivo .pdf' onClick={uploadFile} disabled={loading}>
-              📤
+              <i class="fa-solid fa-upload"></i>
             </button>
             <button title='Enviar Mensagem' onClick={sendMessage} disabled={loading || !input.trim()}>
               ➤
