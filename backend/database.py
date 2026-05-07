@@ -3,10 +3,13 @@ import sqlite3
 import hashlib
 import secrets
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+from zoneinfo import ZoneInfo
 
 DB_PATH = Path(__file__).resolve().parent / "portogpt.db"
+BRASILIA_TZ = ZoneInfo("America/Sao_Paulo")
 DEFAULT_ADMIN_EMAIL = os.getenv("PORTOGPT_ADMIN_EMAIL", "admin@portogpt.com")
 DEFAULT_ADMIN_PASSWORD = os.getenv("PORTOGPT_ADMIN_PASSWORD", "admin123")
 
@@ -19,6 +22,15 @@ DEFAULT_AI_SETTINGS = {
     "similarity_top_k": 10,
     "custom_instructions": "",
 }
+
+
+def brasilia_now() -> str:
+    """Retorna data/hora atual no horário oficial de Brasília."""
+    return datetime.now(BRASILIA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def brasilia_days_ago(days: int) -> str:
+    return (datetime.now(BRASILIA_TZ) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _row_to_user(row) -> Dict[str, Any]:
@@ -274,8 +286,8 @@ def criar_usuario(email: str, senha: str) -> Dict[str, Any]:
         
         derived_name = email.split("@")[0]
         cursor.execute(
-            "INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)",
-            (email, derived_name, password_hash)
+            "INSERT INTO users (email, name, password_hash, created_at) VALUES (?, ?, ?, ?)",
+            (email, derived_name, password_hash, brasilia_now())
         )
         
         conn.commit()
@@ -335,7 +347,7 @@ def autenticar_usuario(email: str, senha: str) -> Dict[str, Any]:
             # Atualiza último login para apoiar a tela de administração.
             conn = sqlite3.connect(str(DB_PATH))
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?", (user_id,))
+            cursor.execute("UPDATE users SET last_login = ? WHERE id = ?", (brasilia_now(), user_id))
             conn.commit()
             conn.close()
 
@@ -412,8 +424,8 @@ def criar_usuario_admin(name: str, email: str, role: str, status: str, senha: Op
         conn = sqlite3.connect(str(DB_PATH))
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO users (email, name, role, status, password_hash) VALUES (?, ?, ?, ?, ?)",
-            (email, name, role, status, password_hash),
+            "INSERT INTO users (email, name, role, status, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (email, name, role, status, password_hash, brasilia_now()),
         )
         conn.commit()
         user_id = cursor.lastrowid
@@ -545,12 +557,12 @@ def atualizar_ai_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
             cursor.execute(
                 """
                 INSERT INTO ai_settings (key, value, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET
                     value = excluded.value,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = excluded.updated_at
                 """,
-                (key, json.dumps(value, ensure_ascii=False)),
+                (key, json.dumps(value, ensure_ascii=False), brasilia_now()),
             )
         conn.commit()
         conn.close()
@@ -586,10 +598,10 @@ def sync_documents_from_disk(data_dir, metadata: Optional[Dict[str, Any]] = None
                     """
                     UPDATE documents
                     SET size = ?, mtime = ?, original_name = COALESCE(original_name, ?),
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = ?
                     WHERE filename = ?
                     """,
-                    (stat.st_size, int(stat.st_mtime), path.name, path.name),
+                    (stat.st_size, int(stat.st_mtime), path.name, brasilia_now(), path.name),
                 )
             else:
                 cursor.execute(
@@ -633,10 +645,10 @@ def sync_templates_from_disk(templates_dir) -> None:
                     """
                     UPDATE templates
                     SET size = ?, mtime = ?, original_name = COALESCE(original_name, ?),
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = ?
                     WHERE filename = ?
                     """,
-                    (stat.st_size, int(stat.st_mtime), path.name, path.name),
+                    (stat.st_size, int(stat.st_mtime), path.name, brasilia_now(), path.name),
                 )
             else:
                 cursor.execute(
@@ -779,9 +791,9 @@ def registrar_documento(
                 mtime = excluded.mtime,
                 active = excluded.active,
                 uploaded_by = COALESCE(excluded.uploaded_by, documents.uploaded_by),
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = ?
             """,
-            (filename, original_name, title, description, size, mtime, 1 if active else 0, uploaded_by),
+            (filename, original_name, title, description, size, mtime, 1 if active else 0, uploaded_by, brasilia_now()),
         )
         conn.commit()
         conn.close()
@@ -821,9 +833,9 @@ def registrar_template(
                 mtime = excluded.mtime,
                 active = excluded.active,
                 uploaded_by = COALESCE(excluded.uploaded_by, templates.uploaded_by),
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = ?
             """,
-            (filename, original_name, title, description, size, mtime, 1 if active else 0, uploaded_by),
+            (filename, original_name, title, description, size, mtime, 1 if active else 0, uploaded_by, brasilia_now()),
         )
         conn.commit()
         conn.close()
@@ -845,10 +857,10 @@ def atualizar_documento(
         cursor.execute(
             """
             UPDATE documents
-            SET title = ?, description = ?, active = ?, updated_at = CURRENT_TIMESTAMP
+            SET title = ?, description = ?, active = ?, updated_at = ?
             WHERE filename = ?
             """,
-            (title.strip(), description.strip(), 1 if active else 0, filename),
+            (title.strip(), description.strip(), 1 if active else 0, brasilia_now(), filename),
         )
         conn.commit()
         updated = cursor.rowcount
@@ -875,10 +887,10 @@ def atualizar_template(
         cursor.execute(
             """
             UPDATE templates
-            SET title = ?, description = ?, active = ?, updated_at = CURRENT_TIMESTAMP
+            SET title = ?, description = ?, active = ?, updated_at = ?
             WHERE filename = ?
             """,
-            (title.strip(), description.strip(), 1 if active else 0, filename),
+            (title.strip(), description.strip(), 1 if active else 0, brasilia_now(), filename),
         )
         conn.commit()
         updated = cursor.rowcount
@@ -1000,8 +1012,27 @@ def _gerar_titulo_chat(message: str) -> str:
                 break
 
     title = title.rstrip(" ?!.:,;")
+    weak_titles = {
+        "",
+        "oi",
+        "oii",
+        "olá",
+        "ola",
+        "bom dia",
+        "boa tarde",
+        "boa noite",
+        "teste",
+        "ping",
+    }
+    if title.lower() in weak_titles or len(title) < 4:
+        return "Novo chat"
+
     if title:
         title = title[0].upper() + title[1:]
+
+    if len(title) > 46:
+        title = f"{title[:43].rstrip()}..."
+    return title or "Novo chat"
 
 
 def obter_perguntas_mais_frequentes(user_id: int, days: int = 7, top_k: int = 3) -> List[Dict[str, Any]]:
@@ -1016,12 +1047,12 @@ def obter_perguntas_mais_frequentes(user_id: int, days: int = 7, top_k: int = 3)
             SELECT message, COUNT(*) as cnt
             FROM chat_history
             WHERE user_id = ?
-              AND created_at >= datetime('now', ?)
+              AND created_at >= ?
             GROUP BY message
             ORDER BY cnt DESC
             LIMIT ?
             """,
-            (user_id, f"-{days} days", top_k),
+            (user_id, brasilia_days_ago(days), top_k),
         )
         rows = cursor.fetchall()
         conn.close()
@@ -1030,10 +1061,6 @@ def obter_perguntas_mais_frequentes(user_id: int, days: int = 7, top_k: int = 3)
         print(f"Erro ao obter perguntas mais frequentes: {str(e)}")
         return []
 
-    if len(title) > 46:
-        title = f"{title[:43].rstrip()}..."
-    return title or "Novo chat"
-
 
 def criar_chat_session(user_id: int, title: Optional[str] = None) -> Dict[str, Any]:
     """Cria uma nova conversa para um usuário."""
@@ -1041,8 +1068,8 @@ def criar_chat_session(user_id: int, title: Optional[str] = None) -> Dict[str, A
         conn = sqlite3.connect(str(DB_PATH))
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO chat_sessions (user_id, title) VALUES (?, ?)",
-            (user_id, title or "Novo chat"),
+            "INSERT INTO chat_sessions (user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (user_id, title or "Novo chat", brasilia_now(), brasilia_now()),
         )
         conn.commit()
         session_id = cursor.lastrowid
@@ -1198,33 +1225,33 @@ def salvar_mensagem(user_id: int, message: str, response: str, session_id: Optio
 
         if session_id is None:
             cursor.execute(
-                "INSERT INTO chat_sessions (user_id, title) VALUES (?, ?)",
-                (user_id, _gerar_titulo_chat(message)),
+                "INSERT INTO chat_sessions (user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (user_id, _gerar_titulo_chat(message), brasilia_now(), brasilia_now()),
             )
             session_id = cursor.lastrowid
             created_session = True
         
         cursor.execute(
-            """INSERT INTO chat_history (session_id, user_id, message, response) 
-               VALUES (?, ?, ?, ?)""",
-            (session_id, user_id, message, response)
+            """INSERT INTO chat_history (session_id, user_id, message, response, created_at) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (session_id, user_id, message, response, brasilia_now())
         )
         chat_id = cursor.lastrowid
 
         if created_session:
             cursor.execute(
-                "UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (session_id,),
+                "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+                (brasilia_now(), session_id),
             )
         else:
             cursor.execute(
                 """
                 UPDATE chat_sessions
                 SET title = CASE WHEN title = 'Novo chat' THEN ? ELSE title END,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
-                (_gerar_titulo_chat(message), session_id, user_id),
+                (_gerar_titulo_chat(message), brasilia_now(), session_id, user_id),
             )
         
         conn.commit()

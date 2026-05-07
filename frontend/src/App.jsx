@@ -11,6 +11,8 @@ import {
   Eye,
   FileText,
   FileUp,
+  Home,
+  LayoutTemplate,
   Lock,
   LogOut,
   MessageSquare,
@@ -36,6 +38,16 @@ import './App.css'
 const API_BASE = 'http://localhost:8000/api'
 const USER_STORAGE_KEY = 'portogpt_user'
 const THEME_STORAGE_KEY = 'portogpt_theme'
+
+const ACCENT_COLORS = [
+  { id: 'porto', label: 'Azul Porto', primary: '#0b4fd8', accent: '#00a6c8', soft: '#dce9ff' },
+  { id: 'ocean', label: 'Oceano', primary: '#0077b6', accent: '#00b4d8', soft: '#d9f4fb' },
+  { id: 'violet', label: 'Violeta', primary: '#7c3aed', accent: '#c65aa8', soft: '#ede7ff' },
+  { id: 'emerald', label: 'Esmeralda', primary: '#0f8f68', accent: '#2dd4bf', soft: '#dff8f2' },
+  { id: 'sunset', label: 'Coral', primary: '#e35d6a', accent: '#f59e0b', soft: '#ffe8ec' },
+]
+
+const DEFAULT_ACCENT = ACCENT_COLORS[0]
 
 const roleLabels = {
   admin: 'Administrador',
@@ -89,7 +101,7 @@ const adminNavItems = [
   { path: '/admin/users', label: 'Usuários', icon: Users },
   { path: '/admin/knowledge', label: 'Conhecimento da IA', icon: Brain },
   { path: '/admin/pdfs', label: 'PDFs Base', icon: FileText },
-  { path: '/admin/templates', label: 'Templates', icon: FileText },
+  { path: '/admin/templates', label: 'Templates', icon: LayoutTemplate },
 ]
 
 function App() {
@@ -101,6 +113,20 @@ function App() {
   const [activeSessionId, setActiveSessionId] = useState(null)
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
+  const [adminSidebarCollapsed, setAdminSidebarCollapsed] = useState(true)
+
+  const selectedAccent = useMemo(
+    () => ACCENT_COLORS.find((color) => color.id === currentUser?.accentColor) || DEFAULT_ACCENT,
+    [currentUser?.accentColor],
+  )
+  const accentStyle = useMemo(
+    () => ({
+      '--primary': selectedAccent.primary,
+      '--accent': selectedAccent.accent,
+      '--primary-soft': selectedAccent.soft,
+    }),
+    [selectedAccent],
+  )
 
   const navigate = useCallback(
     (path, replace = false) => {
@@ -132,8 +158,9 @@ function App() {
 
     apiRequest(`/user/${currentUser.id}`)
       .then((user) => {
-        setCurrentUser(user)
-        localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user))
+        const updatedUser = { ...user, accentColor: currentUser.accentColor || DEFAULT_ACCENT.id }
+        setCurrentUser(updatedUser)
+        localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(updatedUser))
       })
       .catch(() => {
         localStorage.removeItem(USER_STORAGE_KEY)
@@ -142,8 +169,10 @@ function App() {
   }, [currentUser?.id])
 
   const handleLogin = (user) => {
-    setCurrentUser(user)
-    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user))
+    const storedUser = getStoredUser()
+    const updatedUser = { ...user, accentColor: storedUser?.accentColor || DEFAULT_ACCENT.id }
+    setCurrentUser(updatedUser)
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(updatedUser))
     navigate('/', true)
   }
 
@@ -177,6 +206,15 @@ function App() {
     setHistoryRefreshKey((value) => value + 1)
   }, [])
 
+  const updateAccentColor = useCallback((accentColor) => {
+    setCurrentUser((user) => {
+      if (!user) return user
+      const updated = { ...user, accentColor }
+      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(updated))
+      return updated
+    })
+  }, [])
+
   if (!currentUser) {
     return <LoginPage onLogin={handleLogin} theme={theme} onToggleTheme={toggleTheme} />
   }
@@ -186,7 +224,10 @@ function App() {
   const isAdmin = currentUser.role === 'admin'
 
   return (
-    <div className={`app-container ${isAdminRoute ? 'admin-container' : ''} ${sidebarCollapsed && !isAdminRoute ? 'sidebar-collapsed' : ''}`}>
+    <div
+      className={`app-container ${isAdminRoute ? 'admin-container' : ''} ${sidebarCollapsed && !isAdminRoute ? 'sidebar-collapsed' : ''} ${adminSidebarCollapsed && isAdminRoute ? 'admin-sidebar-collapsed' : ''}`}
+      style={accentStyle}
+    >
       {!isAdminRoute && (
         <ChatSidebar
           currentUser={currentUser}
@@ -205,6 +246,7 @@ function App() {
         <TopBar
           currentUser={currentUser}
           avatarOpen={avatarOpen}
+          isAdminRoute={isAdminRoute}
           isAdmin={isAdmin}
           onAvatarOpen={setAvatarOpen}
           onNavigate={navigate}
@@ -221,20 +263,23 @@ function App() {
           chatSessionKey,
           activeSessionId,
           onChatSessionChange: handleChatSessionChange,
+          onAccentChange: updateAccentColor,
+          adminSidebarCollapsed,
+          onToggleAdminSidebar: () => setAdminSidebarCollapsed((value) => !value),
         })}
       </main>
     </div>
   )
 }
 
-function renderRoute({ route, currentUser, isAdmin, onNavigate, chatSessionKey, activeSessionId, onChatSessionChange }) {
+function renderRoute({ route, currentUser, isAdmin, onNavigate, chatSessionKey, activeSessionId, onChatSessionChange, onAccentChange, adminSidebarCollapsed, onToggleAdminSidebar }) {
   if (route.startsWith('/admin')) {
     if (!isAdmin) {
       return <AccessDenied onNavigate={onNavigate} />
     }
 
     return (
-      <AdminLayout route={route} onNavigate={onNavigate}>
+      <AdminLayout collapsed={adminSidebarCollapsed} route={route} onNavigate={onNavigate} onToggleCollapsed={onToggleAdminSidebar}>
         {route === '/admin/knowledge' && <KnowledgePage currentUser={currentUser} onNavigate={onNavigate} />}
         {route === '/admin/pdfs' && <PdfManagementPage currentUser={currentUser} />}
         {route === '/admin/templates' && <TemplateManagementPage currentUser={currentUser} />}
@@ -244,7 +289,7 @@ function renderRoute({ route, currentUser, isAdmin, onNavigate, chatSessionKey, 
   }
 
   if (route === '/perfil') {
-    return <ProfilePage currentUser={currentUser} />
+    return <ProfilePage currentUser={currentUser} onAccentChange={onAccentChange} />
   }
 
   if (route !== '/') {
@@ -424,14 +469,10 @@ function ChatSidebar({
       <div className="sidebar-top">
         <button
           className="brand-lockup brand-button"
-          onClick={collapsed ? onToggleCollapsed : onNewChat}
-          aria-label={collapsed ? 'Abrir barra lateral' : 'Abrir tela inicial do PortoGpt'}
-          title={collapsed ? 'Abrir barra lateral' : 'PortoGPT'}
+          onClick={onToggleCollapsed}
+          aria-label={collapsed ? 'Abrir barra lateral' : 'Fechar barra lateral'}
+          title={collapsed ? 'Abrir barra lateral' : 'Fechar barra lateral'}
         >
-          <span className="brand-mark">
-            <img className="brand-logo" src={theme === 'dark' ? '/logo-dark.svg' : '/logo-white.svg'} alt="" aria-hidden="true" />
-            <PanelLeftOpen className="brand-open-icon" size={18} />
-          </span>
           <span className="brand-copy">
             <strong>PortoGPT</strong>
           </span>
@@ -492,7 +533,6 @@ function ChatSidebar({
                   <MessageSquare size={16} />
                   <span>
                     <strong>{session.title || 'Novo chat'}</strong>
-                    <small>{session.last_message || 'Conversa vazia'}</small>
                   </span>
                   <em>{formatShortDate(session.updated_at)}</em>
                 </button>
@@ -515,6 +555,7 @@ function TopBar({
   avatarOpen,
   currentUser,
   isAdmin,
+  isAdminRoute,
   onAvatarOpen,
   onLogout,
   onNavigate,
@@ -522,12 +563,14 @@ function TopBar({
   theme,
 }) {
   return (
-    <header className="top-bar">
+    <div className="top-bar">
       <div className="top-left">
-        <button className="model-selector" onClick={() => onNavigate('/')}>
-          PortoGpt 1.0
-          <ChevronDown size={17} />
-        </button>
+        {!isAdminRoute && (
+          <button className="model-selector" onClick={() => onNavigate('/')}>
+            PortoGpt 1.0
+            <ChevronDown size={17} />
+          </button>
+        )}
       </div>
 
       <div className="top-actions">
@@ -535,13 +578,16 @@ function TopBar({
           {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
         </button>
 
-        <div className="avatar-menu-wrap">
+        <div
+          className="avatar-menu-wrap"
+          onMouseEnter={() => onAvatarOpen(true)}
+          onMouseLeave={() => onAvatarOpen(false)}
+        >
           <button className="user-profile" onClick={() => onAvatarOpen(!avatarOpen)} aria-label="Abrir menu do usuário">
             {getInitials(currentUser.name || currentUser.email)}
           </button>
 
-          {avatarOpen && (
-            <div className="avatar-menu">
+          <div className={`avatar-menu ${avatarOpen ? 'open' : ''}`}>
               <div className="avatar-menu-header">
                 <strong>{currentUser.name || 'Usuário'}</strong>
                 <span>{currentUser.email}</span>
@@ -560,11 +606,10 @@ function TopBar({
                 <LogOut size={17} />
                 Sair
               </button>
-            </div>
-          )}
+          </div>
         </div>
       </div>
-    </header>
+    </div>
   )
 }
 
@@ -715,17 +760,29 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     setLoading(true)
 
     try {
-      const data = await apiRequest('/chat', {
-        method: 'POST',
-        body: { query: text, user_id: currentUser.id, session_id: currentSessionId },
+      let assistantIndex = -1
+      setMessages((prev) => {
+        assistantIndex = prev.length
+        return [...prev, { role: 'assistant', text: '' }]
       })
+
+      const data = await apiStreamChat(
+        { query: text, user_id: currentUser.id, session_id: currentSessionId },
+        (chunk) => {
+          setMessages((prev) =>
+            prev.map((message, index) =>
+              index === assistantIndex ? { ...message, text: `${message.text}${chunk}` } : message,
+            ),
+          )
+        },
+      )
+
       if (data.session_id && data.session_id !== currentSessionId) {
         setCurrentSessionId(data.session_id)
         onSessionChange?.(data.session_id)
       } else if (data.session_id) {
         onSessionChange?.(data.session_id)
       }
-      setMessages((prev) => [...prev, { role: 'assistant', text: data.response }])
     } catch (err) {
       setMessages((prev) => [...prev, { role: 'assistant', text: err.message || 'Erro ao conectar com o servidor.' }])
     } finally {
@@ -788,10 +845,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
                     const items = welcomeSuggestions.length ? welcomeSuggestions : baseSuggestions
                     const duplicated = [...items, ...items]
 
-                    return duplicated.map((item, index) => {
-                      const displayIndex = String((index % items.length) + 1).padStart(2, '0')
-
-                      return (
+                    return duplicated.map((item, index) => (
                         <button
                           type="button"
                           className="flip-card"
@@ -802,7 +856,6 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
                         >
                           <div className="flip-inner">
                             <article className="glass-card front">
-                              <span aria-hidden="true">{displayIndex}</span>
                               <h2>{item.title}</h2>
                             </article>
 
@@ -811,8 +864,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
                             </article>
                           </div>
                         </button>
-                      )
-                    })
+                      ))
                   })()}
                 </div>
               </div>
@@ -823,19 +875,15 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={`message-row ${message.role}`}>
                 <div className="message-content">
-                  <div className="message-icon">{message.role === 'assistant' ? <Bot size={18} /> : getInitials(currentUser.name || currentUser.email)}</div>
                   <div className="message-text">
                     {message.role === 'assistant' ? <ReactMarkdown>{message.text}</ReactMarkdown> : message.text}
                   </div>
                 </div>
               </div>
             ))}
-            {loading && (
+            {loading && messages[messages.length - 1]?.role !== 'assistant' && (
               <div className="message-row assistant">
                 <div className="message-content">
-                  <div className="message-icon">
-                    <Bot size={18} />
-                  </div>
                   <div className="message-text loading-text">Pensando...</div>
                 </div>
               </div>
@@ -890,15 +938,26 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
   )
 }
 
-function AdminLayout({ children, route, onNavigate }) {
+function AdminLayout({ children, collapsed, route, onNavigate, onToggleCollapsed }) {
   return (
     <section className="admin-view">
       <aside className="admin-menu">
         <div className="admin-menu-title">
-          <Database size={19} />
-          <span>Painel</span>
+          <button
+            className="admin-menu-toggle"
+            onClick={onToggleCollapsed}
+            aria-label={collapsed ? 'Abrir menu administrativo' : 'Fechar menu administrativo'}
+            title={collapsed ? 'Abrir menu administrativo' : 'Fechar menu administrativo'}
+          >
+            {collapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
+            <span>Painel</span>
+          </button>
         </div>
         <nav aria-label="Menu administrativo">
+          <button className="admin-menu-item" onClick={() => onNavigate('/')}>
+            <Home size={18} />
+            <span>Chat inicial</span>
+          </button>
           {adminNavItems.map((item) => (
             <button
               key={item.path}
@@ -906,7 +965,7 @@ function AdminLayout({ children, route, onNavigate }) {
               onClick={() => onNavigate(item.path)}
             >
               <item.icon size={18} />
-              {item.label}
+              <span>{item.label}</span>
             </button>
           ))}
         </nav>
@@ -1539,7 +1598,7 @@ function PdfManagementPage({ currentUser }) {
         method: 'DELETE',
         userId: currentUser.id,
       })
-      setNotice('PDF removido do armazenamento e do SQLite.')
+      setNotice('PDF removido do armazenamento e do banco de dados.')
       await loadDocs()
     } catch (err) {
       setError(err.message)
@@ -1582,15 +1641,6 @@ function PdfManagementPage({ currentUser }) {
           <div>
             <strong>{activeDocs}</strong>
             <span>Ativos na IA</span>
-          </div>
-        </article>
-        <article className="stat-card">
-          <div className="stat-icon purple">
-            <Database size={22} />
-          </div>
-          <div>
-            <strong>SQLite</strong>
-            <span>Metadados salvos</span>
           </div>
         </article>
         <article className="stat-card">
@@ -1798,7 +1848,7 @@ function TemplateManagementPage({ currentUser }) {
         method: 'DELETE',
         userId: currentUser.id,
       })
-      setNotice('Template removido do armazenamento e do SQLite.')
+      setNotice('Template removido do armazenamento e do banco de dados.')
       await loadTemplates()
     } catch (err) {
       setError(err.message)
@@ -1837,15 +1887,6 @@ function TemplateManagementPage({ currentUser }) {
           <div>
             <strong>{activeTemplates}</strong>
             <span>Ativos</span>
-          </div>
-        </article>
-        <article className="stat-card">
-          <div className="stat-icon purple">
-            <Database size={22} />
-          </div>
-          <div>
-            <strong>SQLite</strong>
-            <span>Metadados salvos</span>
           </div>
         </article>
         <article className="stat-card">
@@ -2255,7 +2296,9 @@ function DocumentModal({ initialDocument, mode, onClose, onSave }) {
   )
 }
 
-function ProfilePage({ currentUser }) {
+function ProfilePage({ currentUser, onAccentChange }) {
+  const selectedAccent = currentUser.accentColor || DEFAULT_ACCENT.id
+
   return (
     <section className="profile-page">
       <div className="profile-card">
@@ -2282,6 +2325,28 @@ function ProfilePage({ currentUser }) {
             <dd>{formatDate(currentUser.last_login, 'Nunca')}</dd>
           </div>
         </dl>
+
+        <div className="profile-accent-panel">
+          <div>
+            <strong>Cor de destaque</strong>
+            <span>Personaliza sua mensagem, o botão de envio e a saudação inicial.</span>
+          </div>
+          <div className="accent-options" role="radiogroup" aria-label="Cor de destaque">
+            {ACCENT_COLORS.map((color) => (
+              <button
+                key={color.id}
+                type="button"
+                className={`accent-swatch ${selectedAccent === color.id ? 'active' : ''}`}
+                style={{ '--swatch-primary': color.primary, '--swatch-accent': color.accent }}
+                onClick={() => onAccentChange(color.id)}
+                aria-label={color.label}
+                title={color.label}
+              >
+                <span />
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
     </section>
   )
@@ -2384,6 +2449,56 @@ async function apiRequest(endpoint, options = {}) {
   }
 
   return payload
+}
+
+async function apiStreamChat(body, onChunk) {
+  const response = await fetch(`${API_BASE}/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok || !response.body) {
+    let message = 'Erro ao conectar com o servidor.'
+    try {
+      const payload = await response.json()
+      message = payload.detail || message
+    } catch {
+      // Mantém mensagem padrão quando o corpo não vier em JSON.
+    }
+    throw new Error(message)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let sessionId = null
+
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      if (!line.trim()) continue
+      const event = JSON.parse(line)
+      if (event.type === 'chunk') {
+        onChunk(event.text || '')
+      }
+      if (event.type === 'done') {
+        sessionId = event.session_id
+      }
+      if (event.type === 'error') {
+        throw new Error(event.message || 'Erro ao conectar com o servidor.')
+      }
+    }
+
+    if (done) break
+  }
+
+  return { session_id: sessionId }
 }
 
 function getInitialRoute() {
