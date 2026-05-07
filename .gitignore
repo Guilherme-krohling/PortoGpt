@@ -12,6 +12,7 @@ Thumbs.db
 # Ambiente Virtual (Onde instalamos as libs)
 backend/venv/
 backend/.venv/
+venv/
 
 # Bytecode compilado (Arquivos temporários do Python)
 backend/__pycache__/
