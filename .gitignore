@@ -14,6 +14,18 @@ backend/venv/
 backend/.venv/
 venv/
 
+# Ignorar arquivos de banco de dados e cache
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+
+# Ignorar executáveis e arquivos compactados
+*.exe
+*.zip
+*.7z
+*.rar
+
 # Bytecode compilado (Arquivos temporários do Python)
 backend/__pycache__/
 *.py[cod]

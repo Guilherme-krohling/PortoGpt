@@ -1,0 +1,46 @@
+{
+    "oficio": {
+        "id": "oficio",
+        "nome": "Ofício",
+        "descricao": "Documento oficial para comunicação externa e interna entre setores.",
+        "arquivo": "oficio.tex",
+        "variaveis": [
+            "CIDADE",
+            "DATA",
+            "NUMERO_OFICIO",
+            "DESTINATARIO",
+            "ASSUNTO",
+            "CORPO_TEXTO",
+            "REMETENTE",
+            "CARGO"
+        ]
+    },
+    "relatorio_tecnico": {
+        "id": "relatorio_tecnico",
+        "nome": "Relatório Técnico",
+        "descricao": "Relatório para documentar inspeções, análises e resultados técnicos.",
+        "arquivo": "relatorio_tecnico.tex",
+        "variaveis": [
+            "DATA",
+            "SETOR",
+            "RESPONSAVEL",
+            "ASSUNTO",
+            "CONTEUDO"
+        ]
+    },
+    "parecer": {
+        "id": "parecer",
+        "nome": "Parecer Técnico-Jurídico",
+        "descricao": "Parecer para manifestação sobre a legalidade e viabilidade de ações administrativas.",
+        "arquivo": "parecer.tex",
+        "variaveis": [
+            "PROCESSO",
+            "INTERESSADO",
+            "ASSUNTO",
+            "DATA",
+            "CONTEUDO",
+            "PARECERISTA",
+            "OAB"
+        ]
+    }
+}

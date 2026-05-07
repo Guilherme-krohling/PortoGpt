@@ -56,6 +56,45 @@ body {
   line-height: 0;
 }
 
+/* Botão "Criar Documento" na sidebar */
+.doc-editor-btn {
+  background: linear-gradient(135deg, #E74C3C 0%, #C0392B 100%) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 15px !important;
+  padding: 10px 15px !important;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-size: 14px !important;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(231, 76, 60, 0.25);
+}
+
+.doc-editor-btn:hover {
+  background: linear-gradient(135deg, #C0392B 0%, #A93226 100%) !important;
+  box-shadow: 0 4px 14px rgba(231, 76, 60, 0.4) !important;
+  transform: translateY(-1px);
+}
+
+.doc-editor-btn i {
+  font-size: 16px;
+}
+
+.doc-editor-btn span {
+  font-size: 14px;
+}
+
+.doc-editor-btn.active {
+  background: linear-gradient(135deg, #A93226 0%, #922B21 100%) !important;
+  box-shadow: 0 0 0 2px #fff, 0 4px 14px rgba(231, 76, 60, 0.4) !important;
+}
+
 .history-list {
   flex: 1;
   margin-top: 30px;

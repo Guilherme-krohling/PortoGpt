@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import ReactMarkdown from 'react-markdown'
 import $ from 'jquery'
+import DocumentEditor from './components/DocumentEditor/DocumentEditor'
 
 function App() {
   const [messages, setMessages] = useState([]);
@@ -10,6 +11,11 @@ function App() {
   const [file, setFile] = useState(false);
   const chatContainerRef = useRef(null);
   const fileInput = useRef(null);
+
+  // Estado para controlar a tela ativa: 'chat' ou 'editor'
+  const [activeView, setActiveView] = useState('chat');
+  // Código LaTeX injetado via IA (Fluxo 1)
+  const [injectedLatex, setInjectedLatex] = useState(null);
 
   // Rola para o final sempre que chega mensagem nova
   useEffect(() => {
@@ -21,17 +27,31 @@ function App() {
     $('#modalUpload').hide();
   }, [])
 
-  const sendMessage = async () => {
-    if (!input.trim()) return;
+  const sendMessage = async (overrideText) => {
+    const textToSend = typeof overrideText === 'string' ? overrideText : input;
+    if (!textToSend.trim()) return;
 
-    const userMessage = { role: 'user', text: input };
+    const userMessage = { role: 'user', text: textToSend };
 
     setMessages(prev => [...prev, userMessage]);
-    setInput('');
+    if (typeof overrideText !== 'string') setInput('');
+    
     const returnData = await request('/chat', JSON.stringify({ query: userMessage.text }),
       {'Content-type':'application/json'});
-    const aiMessage = { role: 'assistant', text: returnData.response };
-    setMessages(prev => [...prev, aiMessage]);
+    
+    if (returnData) {
+      const aiMessage = { role: 'assistant', text: returnData.response };
+      setMessages(prev => [...prev, aiMessage]);
+
+      // Fluxo 1: Se a IA gerou um documento LaTeX, redireciona para o editor
+      if (returnData.has_document && returnData.latex_code) {
+        setInjectedLatex(returnData.latex_code);
+        // Pequeno delay para o usuário ver a mensagem antes de redirecionar
+        setTimeout(() => {
+          setActiveView('editor');
+        }, 2000);
+      }
+    }
   };
 
   const handleKeyPress = (e) => {
@@ -41,6 +61,7 @@ function App() {
   const handleNewChat = () => {
     setMessages([]);
     setInput('');
+    setActiveView('chat');
   }
 
   const uploadFile = () => {
@@ -83,13 +104,32 @@ function App() {
     }
   }
 
+  // Handlers para navegar entre as telas
+  const openDocumentEditor = () => {
+    setInjectedLatex(null); // Limpa LaTeX injetado (modo manual)
+    setActiveView('editor');
+  };
+
+  const backToChat = () => {
+    setActiveView('chat');
+  };
+
+  // ==========================================
+  // RENDERIZAÇÃO — Layout unificado com sidebar sempre visível
+  // ==========================================
   return (
     <div className="app-container">
-      {/* 1. BARRA LATERAL (SIDEBAR) */}
+      {/* 1. BARRA LATERAL (SIDEBAR) — sempre visível */}
       <aside className="sidebar">
         <div className="sidebar-header">
           <button onClick={handleNewChat} className="new-chat-btn">
             <span>+</span> Novo chat
+          </button>
+
+          {/* Botão para abrir o Editor de Documentos */}
+          <button onClick={openDocumentEditor} className={`doc-editor-btn ${activeView === 'editor' ? 'active' : ''}`} title="Criar documento padronizado">
+            <i className="fa-solid fa-file-pdf"></i>
+            <span>Criar Documento</span>
           </button>
         </div>
 
@@ -106,78 +146,108 @@ function App() {
         </div>
       </aside>
 
-      {/* 2. ÁREA PRINCIPAL */}
-      <main className="main-content">
-        {/* 3. LOGIN / TOPO */}
-        <header className="top-bar">
-          <div className="model-selector">
-            PortoGpt 1.0
-          </div>
-          <div className="user-profile">
-            <div className="user-avatar">N</div>
-          </div>
-        </header>
-
-        {/* 4. CHAT CENTRALIZADO */}
-        <div className="chat-area" ref={chatContainerRef}>
-          {messages.length === 0 ? (
-            <div className="welcome-screen">
-              <h1>Olá, Nickolas</h1>
-              <p>Como posso ajudar com os dados portuários hoje?</p>
+      {/* 2. ÁREA PRINCIPAL — alterna entre Chat e Editor */}
+      {activeView === 'editor' ? (
+        <DocumentEditor
+          onBack={backToChat}
+          initialLatex={injectedLatex}
+        />
+      ) : (
+        <main className="main-content">
+          {/* 3. LOGIN / TOPO */}
+          <header className="top-bar">
+            <div className="model-selector">
+              PortoGpt 2.0
             </div>
-          ) : (
-            <div className="messages-container">
-              {messages.map((msg, index) => (
-                <div key={index} className={`message-row ${msg.role}`}>
-                  <div className="message-content">
-                    <div className="message-icon">
-                      {msg.role === 'assistant' ? '🤖' : 'N'}
-                    </div>
-                    <div className="message-text">
-                      {msg.role === 'assistant'
-                        ? <ReactMarkdown>{msg.text}</ReactMarkdown>
-                        : msg.text
-                      }
+            <div className="user-profile">
+              <div className="user-avatar">N</div>
+            </div>
+          </header>
+
+          {/* 4. CHAT CENTRALIZADO */}
+          <div className="chat-area" ref={chatContainerRef}>
+            {messages.length === 0 ? (
+              <div className="welcome-screen">
+                <h1>Olá, Nickolas</h1>
+                <p>Como posso ajudar com os dados portuários hoje?</p>
+              </div>
+            ) : (
+              <div className="messages-container">
+                {messages.map((msg, index) => (
+                  <div key={index} className={`message-row ${msg.role}`}>
+                    <div className="message-content">
+                      <div className="message-icon">
+                        {msg.role === 'assistant' ? '🤖' : 'N'}
+                      </div>
+                      <div className="message-text">
+                        {msg.role === 'assistant'
+                          ? <ReactMarkdown
+                              components={{
+                                a: ({node, href, children, ...props}) => {
+                                  if (href && href.startsWith('#modelo:')) {
+                                    const modeloId = href.split(':')[1];
+                                    return (
+                                      <a
+                                        href={href}
+                                        {...props}
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          sendMessage(`Por favor, gere um documento usando o modelo "${modeloId}" com as informações que solicitei.`);
+                                        }}
+                                        className="chat-model-link"
+                                      >
+                                        {children}
+                                      </a>
+                                    );
+                                  }
+                                  return <a href={href} {...props}>{children}</a>;
+                                }
+                              }}
+                            >{msg.text}</ReactMarkdown>
+                          : msg.text
+                        }
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-              {loading && (
-                <div className="message-row assistant">
-                  <div className="message-content">
-                    <div className="message-icon">🤖</div>
-                    <div className="message-text loading-text">Pensando...</div>
+                ))}
+                {loading && (
+                  <div className="message-row assistant">
+                    <div className="message-content">
+                      <div className="message-icon">🤖</div>
+                      <div className="message-text loading-text">Pensando...</div>
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* 5. INPUT (EMBAIXO) */}
-        <div className="input-container">
-          <div className="input-box">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Digite sua pergunta aqui..."
-              disabled={loading}
-            />
-            <input type="file" ref={fileInput} style={{ display: 'none' }} />
-            <button title='Fazer upload de arquivo .pdf' onClick={uploadFile} disabled={loading}>
-              <i class="fa-solid fa-upload"></i>
-            </button>
-            <button title='Enviar Mensagem' onClick={sendMessage} disabled={loading || !input.trim()}>
-              ➤
-            </button>
+                )}
+              </div>
+            )}
           </div>
-          <p className="disclaimer">
-            O PortoGpt pode cometer erros. Verifique as informações importantes.
-          </p>
-        </div>
-      </main>
+
+          {/* 5. INPUT (EMBAIXO) */}
+          <div className="input-container">
+            <div className="input-box">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder="Digite sua pergunta aqui..."
+                disabled={loading}
+              />
+              <input type="file" ref={fileInput} style={{ display: 'none' }} />
+              <button title='Fazer upload de arquivo .pdf' onClick={uploadFile} disabled={loading}>
+                <i className="fa-solid fa-upload"></i>
+              </button>
+              <button title='Enviar Mensagem' onClick={sendMessage} disabled={loading || !input.trim()}>
+                ➤
+              </button>
+            </div>
+            <p className="disclaimer">
+              O PortoGpt pode cometer erros. Verifique as informações importantes.
+            </p>
+          </div>
+        </main>
+      )}
+
       <div id='modalUpload' className='overlay'>
         <div className='modal'>
           Deseja fazer o upload do arquivo {file?.name}?

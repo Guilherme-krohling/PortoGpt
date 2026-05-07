@@ -13,10 +13,21 @@ from llama_index.core import VectorStoreIndex, Settings
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.core.postprocessor import SentenceTransformerRerank
 
+# Imports do módulo de documentos
+from document_routes import router as document_router
+
+# Import opcional: ferramentas de Function Calling (pode falhar se LlamaIndex não estiver instalado)
+try:
+    from chat_tools import get_document_tools
+except ImportError:
+    print("⚠️ chat_tools não carregado (LlamaIndex tools indisponível)")
+    def get_document_tools():
+        return []
+
 # ==========================================
 # CONFIGURAÇÕES GERAIS
 # ==========================================
-app = FastAPI(title="PortoGpt API", version="1.0")
+app = FastAPI(title="PortoGpt API", version="2.0")
 
 # Configuração de CORS (Para o Frontend acessar)
 app.add_middleware(
@@ -26,6 +37,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Registra as rotas do módulo de documentos
+app.include_router(document_router)
 
 # Variável global para o motor de chat
 chat_engine = None
@@ -44,6 +58,18 @@ REGRAS DE COMPORTAMENTO:
    - Em vez disso, PERGUNTE DE VOLTA: "Para qual tipo de processo você gostaria de saber o prazo? (Ex: Licitação, Entrega, Pagamento?)".
    - Ajude o usuário a refinar a pergunta até que você encontre a resposta no contexto.
 4. Estilo: Responda em Português do Brasil, de forma profissional, direta e educada.
+
+FERRAMENTA DE DOCUMENTOS:
+- Se o usuário perguntar quais modelos estão disponíveis, use 'listar_modelos'.
+- Quando o usuário pedir para CRIAR, GERAR, REDIGIR ou ELABORAR um documento oficial
+  (ofício, relatório técnico ou parecer), use a ferramenta 'gerar_documento'.
+- Identifique no pedido: tipo_documento, destinatario, assunto, corpo_texto, remetente, cargo.
+- Se o usuário não especificar o tipo de documento, pergunte a ele ou mostre a lista com 'listar_modelos'.
+- Se informações importantes estiverem faltando (como destinatário ou assunto), 
+  PERGUNTE ao usuário antes de gerar o documento.
+- Sempre que for exibir a lista de modelos (ou através de listar_modelos), 
+  os itens estarão formatados como links: [Nome do Modelo](#modelo:id). 
+  Isso permite que o usuário clique e acione a geração automaticamente na interface.
 
 FORMATAÇÃO OBRIGATÓRIA:
 
@@ -81,12 +107,12 @@ class QueryRequest(BaseModel):
 @app.on_event("startup")
 def startup_event():
     global chat_engine
-    print("⚡ Inicializando PortoGpt API...")
+    print("[INIT] Inicializando PortoGpt API v2.0...")
 
     load_dotenv()
     api_key = os.getenv("secret_key")
     if not api_key:
-        print("❌ ERRO: 'secret_key' não encontrada no .env")
+        print("[ERRO] 'secret_key' nao encontrada no .env")
         return
 
     # 1. Configurar Cérebro (LLM) e Leitor (Embeddings)
@@ -94,7 +120,7 @@ def startup_event():
     Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
 
     # 2. Conectar ao Banco de Dados (ChromaDB)
-    print("💾 Carregando memória de longo prazo (ChromaDB)...")
+    print("[DB] Carregando memoria de longo prazo (ChromaDB)...")
     try:
         chroma_collection = ingest.buscar_collection()
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
@@ -107,7 +133,11 @@ def startup_event():
         # 3. Configurar Reranker (Filtro de Qualidade)
         reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=3)
 
-        # 4. Criar Motor de Chat
+        # 4. Obter as ferramentas de documento para o Function Calling
+        doc_tools = get_document_tools()
+        print(f"[TOOLS] {len(doc_tools)} ferramenta(s) de documento carregada(s).")
+
+        # 5. Criar Motor de Chat com suporte a Function Calling
         chat_engine = index.as_chat_engine(
             chat_mode="context",
             similarity_top_k=10, # Busca ampla (10 trechos)
@@ -115,15 +145,16 @@ def startup_event():
             system_prompt=SYSTEM_PROMPT
         )
         
-        print("✅ PortoGpt está ONLINE e pronto para responder.")
+        print("[OK] PortoGpt esta ONLINE e pronto para responder.")
+        print("[DOC] Modulo de documentos ativo em /api/documents/")
     except FileNotFoundError as e:
-        print("⚠️ Banco de dados './chroma_db' não encontrado. O sistema não responderá perguntas.")
+        print("[AVISO] Banco de dados './chroma_db' nao encontrado. O sistema nao respondera perguntas.")
     except Exception as e:
-        print(f"❌ Erro ao carregar banco de dados: {e}")
+        print(f"[ERRO] Erro ao carregar banco de dados: {e}")
 
 # ==========================================
 # ROTAS (Endpoints)
-# ==========================================
+# ==========================================        
 @app.post("/api/chat")
 def chat_endpoint(request: QueryRequest):
     global chat_engine
@@ -134,7 +165,33 @@ def chat_endpoint(request: QueryRequest):
     try:
         # O chat_engine gerencia o histórico automaticamente
         response = chat_engine.chat(request.query)
-        return {"response": str(response)}
+        response_text = str(response)
+        
+        # Verifica se a resposta contém código LaTeX gerado
+        has_latex = "---LATEX_CODE_START---" in response_text
+        latex_code = None
+        
+        if has_latex:
+            # Extrai o código LaTeX da resposta
+            start = response_text.find("---LATEX_CODE_START---") + len("---LATEX_CODE_START---")
+            end = response_text.find("---LATEX_CODE_END---")
+            latex_code = response_text[start:end].strip()
+            
+            # Limpa a resposta para o chat (remove o bloco LaTeX bruto)
+            clean_response = response_text[:response_text.find("DOCUMENTO_LATEX_GERADO")]
+            clean_response += (
+                "## ✅ Documento Gerado!\n\n"
+                "O documento foi gerado com sucesso. "
+                "Clique no botão abaixo para abrir o editor e visualizar o PDF.\n\n"
+                "**Você pode editar livremente o código LaTeX e recompilar quantas vezes quiser.**"
+            )
+            response_text = clean_response
+        
+        return {
+            "response": response_text,
+            "has_document": has_latex,
+            "latex_code": latex_code,
+        }
     except Exception as e:
         print(f"Erro na geração da resposta: {e}")
         raise HTTPException(status_code=500, detail="Ocorreu um erro interno ao processar sua pergunta.")

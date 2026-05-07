@@ -1,15 +1,33 @@
 # Pacotes do LLM e API
-# Usamos == para travar a versão exatamente
-groq==0.11.0
-python-dotenv==1.0.1
+# Usamos == para travar a versão exatamente 
+
+
+#python 3.12: groq==0.11.0
+#python 3.14
+groq
+
+
+#python 3.12: python-dotenv==1.0.1
+#python 3.14
+python-dotenv
 
 # Pacotes LlamaIndex
-llama-index-core==0.11.0
-llama-index-llms-groq==0.2.0
+#python 3.12: llama-index-core==0.11.0
+#python 3.14
+
+llama-index-core
+#python 3.12: llama-index-llms-groq==0.2.0
+#python 3.14
+llama-index-llms-groq
 
 # Pacotes de Leitura de Dados (PDFs)
 # Pacote específico para ler arquivos PDF
-pypdf==4.2.0
+#python 3.12: pypdf==4.2.0
+#python 3.14
+pypdf
+
+
+
 # Pacote específico para o SimpleDirectoryReader
 llama-index-readers-file
 
@@ -28,3 +46,6 @@ llama-index-vector-stores-chroma
 
 #biblioteca nova para o Reranking (que ajuda o robô a escolher os melhores trechos do PDF)
 llama-index-postprocessor-colbert-rerank
+
+#biblioteca para upload de arquivos via FastAPI
+python-multipart
