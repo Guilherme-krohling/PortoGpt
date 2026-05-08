@@ -3,7 +3,7 @@ import chromadb
 import ingest
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi import BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
@@ -48,6 +48,8 @@ app.add_middleware(
 chat_engine = None
 DATA_DIR = Path(__file__).resolve().parent / "data"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+RAW_UPLOADS_DIR = Path(__file__).resolve().parent / "pending_uploads"
+PROCESSED_UPLOADS_DIR = Path(__file__).resolve().parent / "processed_uploads"
 METADATA_FILE = Path(__file__).resolve().parent / "docs.json"
 
 # ==========================================
@@ -143,6 +145,25 @@ class DocumentUpdateRequest(BaseModel):
     active: bool = True
 
 
+class RejectDocumentRequest(BaseModel):
+    feedback: str = ""
+
+
+def require_active_user(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
+    """Valida usuario autenticado e ativo."""
+    if x_user_id is None:
+        raise HTTPException(status_code=401, detail="Usuario nao autenticado")
+
+    user = database.obter_usuario(x_user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Usuario nao encontrado")
+
+    if user.get("status") != "active":
+        raise HTTPException(status_code=403, detail="Usuario inativo ou pendente")
+
+    return user
+
+
 def require_admin(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
     """Valida se o usuário atual pode acessar rotas administrativas."""
     if x_user_id is None:
@@ -157,6 +178,16 @@ def require_admin(x_user_id: Optional[int] = Header(default=None, alias="X-User-
 
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Acesso permitido apenas para administradores")
+
+    return user
+
+
+def require_pdf_manager(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
+    """Valida se o usuario atual pode gerenciar PDFs."""
+    user = require_active_user(x_user_id)
+
+    if user.get("role") not in {"admin", "editor"}:
+        raise HTTPException(status_code=403, detail="Acesso permitido apenas para administradores e editores")
 
     return user
 
@@ -295,6 +326,8 @@ def startup_event():
     database.init_db()
     database.sync_documents_from_disk(DATA_DIR, load_docs_metadata())
     os.makedirs(TEMPLATES_DIR, exist_ok=True)
+    os.makedirs(RAW_UPLOADS_DIR, exist_ok=True)
+    os.makedirs(PROCESSED_UPLOADS_DIR, exist_ok=True)
     database.sync_templates_from_disk(TEMPLATES_DIR)
 
     api_key = os.getenv("secret_key")
@@ -443,6 +476,12 @@ def delete_user_endpoint(user_id: int, admin_user=Depends(require_admin)):
             raise HTTPException(status_code=404, detail=result["message"])
         raise HTTPException(status_code=400, detail=result["message"])
     return result
+
+
+@app.get("/api/admin/dashboard")
+def admin_dashboard_endpoint(admin_user=Depends(require_admin)):
+    """Indicadores agregados para o dashboard administrativo."""
+    return {"stats": database.obter_admin_dashboard_stats()}
 
 
 # ========== ADMIN CONHECIMENTO DA IA ==========
@@ -672,7 +711,31 @@ def resolve_template_file(filename: str):
     return safe_filename, file_path
 
 
-def register_saved_document(filename: str, original_name: str, file_path: Path, title=None, description=None, uploaded_by=None):
+def unique_pdf_filename(original_name: str) -> str:
+    safe_name = os.path.basename(original_name or "documento.pdf")
+    stem = Path(safe_name).stem or "documento"
+    suffix = Path(safe_name).suffix.lower() or ".pdf"
+    if suffix != ".pdf":
+        raise HTTPException(status_code=400, detail="Envie apenas arquivos PDF")
+    return f"{stem}_{int(time.time() * 1000)}{suffix}"
+
+
+def resolve_managed_file(root: Path, filename: str):
+    safe_filename = os.path.basename(filename)
+    file_path = (root / safe_filename).resolve()
+    root_path = root.resolve()
+    if not str(file_path).startswith(str(root_path)) or not file_path.exists():
+        raise HTTPException(status_code=404, detail="Arquivo nÃ£o encontrado")
+    return safe_filename, file_path
+
+
+def process_document_template(raw_path: Path, processed_path: Path):
+    """Prepara o ponto de templatizacao antes da aprovacao."""
+    # TODO: substituir esta copia pela transformacao real usando template quando a regra estiver definida.
+    shutil.copyfile(raw_path, processed_path)
+
+
+def register_saved_document(filename: str, original_name: str, file_path: Path, title=None, description=None, uploaded_by=None, status="aprovado", raw_filename=None, processed_filename=None, approved_by=None):
     stat = file_path.stat()
     result = database.registrar_documento(
         filename=filename,
@@ -683,6 +746,10 @@ def register_saved_document(filename: str, original_name: str, file_path: Path, 
         mtime=int(stat.st_mtime),
         active=True,
         uploaded_by=uploaded_by,
+        status=status,
+        raw_filename=raw_filename or filename,
+        processed_filename=processed_filename or filename,
+        approved_by=approved_by,
     )
     if not result["success"]:
         raise HTTPException(status_code=500, detail=result["message"])
@@ -709,44 +776,245 @@ def register_saved_template(filename: str, original_name: str, file_path: Path, 
 @app.post("/api/upload")
 def upload_endpoint(
     file: UploadFile = File(...),
+    message: Optional[str] = Form(default=None),
+    session_id: Optional[int] = Form(default=None),
     background_tasks: BackgroundTasks = None,
     x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
 ):
     try:
         # Segurança: sanitizar nome e evitar path traversal
-        filename = os.path.basename(file.filename)
-        dest_path = DATA_DIR / filename
+        user = require_active_user(x_user_id)
+        filename = unique_pdf_filename(file.filename)
         os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(RAW_UPLOADS_DIR, exist_ok=True)
+        os.makedirs(PROCESSED_UPLOADS_DIR, exist_ok=True)
+        is_auto_approved = user.get("role") in {"admin", "editor"}
+        dest_path = DATA_DIR / filename if is_auto_approved else RAW_UPLOADS_DIR / filename
+        processed_path = PROCESSED_UPLOADS_DIR / filename
         # Salvar arquivo em data/
         with open(dest_path, 'wb') as out:
             shutil.copyfileobj(file.file, out)
+        process_document_template(dest_path, processed_path)
 
         # Atualizar metadata
-        meta = load_docs_metadata()
-        meta[filename] = {"active": True}
-        save_docs_metadata(meta)
-        document = register_saved_document(filename, file.filename, dest_path, uploaded_by=x_user_id)
+        if is_auto_approved:
+            meta = load_docs_metadata()
+            meta[filename] = {"active": True}
+            save_docs_metadata(meta)
+            document = register_saved_document(
+                filename, file.filename, dest_path, uploaded_by=user["id"],
+                status="aprovado", raw_filename=filename, processed_filename=filename, approved_by=user["id"],
+            )
+        else:
+            stat = processed_path.stat()
+            result = database.registrar_documento(
+                filename=filename,
+                original_name=file.filename,
+                title=Path(file.filename).stem,
+                description="",
+                size=stat.st_size,
+                mtime=int(stat.st_mtime),
+                active=False,
+                uploaded_by=user["id"],
+                status="pendente",
+                raw_filename=filename,
+                processed_filename=filename,
+            )
+            if not result["success"]:
+                raise HTTPException(status_code=500, detail=result["message"])
+            document = result["document"]
 
         # Reindex apenas o arquivo enviado — agendado em background para não bloquear
-        try:
-            if background_tasks is not None:
-                background_tasks.add_task(rebuild_index, file_paths=[str(dest_path)])
-            else:
-                rebuild_index(file_paths=[str(dest_path)])
-        except Exception as e:
-            print('Erro ao agendar reindex:', e)
+        if is_auto_approved:
+            try:
+                if background_tasks is not None:
+                    background_tasks.add_task(rebuild_index, file_paths=[str(dest_path)])
+                else:
+                    rebuild_index(file_paths=[str(dest_path)])
+            except Exception as e:
+                print('Erro ao agendar reindex:', e)
+        response = (
+            f"Upload de {file.filename} aprovado automaticamente."
+            if is_auto_approved
+            else f"Documento {file.filename} enviado para templatizacao e aprovacao do administrador."
+        )
+        chat_session_id = session_id
+        if message is not None:
+            user_message = message.strip() or f"Enviei o PDF {file.filename}."
+            save_result = database.salvar_mensagem(
+                user["id"],
+                f"{user_message}\n\n[PDF enviado: {file.filename}]",
+                response,
+                session_id=session_id,
+            )
+            chat_session_id = save_result.get("session_id")
 
-        return {"response": f"Upload de {filename} bem-sucedido!", "document": document}
+        return {
+            "response": response,
+            "document": document,
+            "formatted_pdf_url": f"/api/submissions/{document['id']}/processed",
+            "session_id": chat_session_id,
+        }
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail="Não foi possível fazer o upload do arquivo")
 
 
 @app.get("/api/docs")
-def list_docs():
+def list_docs(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
     """Lista arquivos na pasta data com metadados do SQLite."""
     database.sync_documents_from_disk(DATA_DIR, load_docs_metadata())
-    return JSONResponse(content={"files": database.listar_documentos()})
+    user = database.obter_usuario(x_user_id) if x_user_id else None
+    if user and user.get("status") == "active" and user.get("role") in {"admin", "editor"}:
+        files = database.listar_documentos()
+    else:
+        files = [doc for doc in database.listar_documentos(status="aprovado") if doc.get("active")]
+    return JSONResponse(content={"files": files})
+
+
+@app.get("/api/docs/{filename}/file")
+def view_document_file(filename: str, user_id: Optional[int] = None, x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
+    resolved_user_id = x_user_id or user_id
+    user = database.obter_usuario(resolved_user_id) if resolved_user_id else None
+    doc = database.obter_documento(os.path.basename(filename))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+    if doc.get("status") != "aprovado" and user and user.get("role") not in {"admin", "editor"}:
+        raise HTTPException(status_code=403, detail="Documento ainda nÃ£o aprovado")
+    if doc.get("status") != "aprovado" and not user:
+        raise HTTPException(status_code=403, detail="Documento ainda nÃ£o aprovado")
+    _, file_path = resolve_data_file(filename)
+    return FileResponse(file_path, media_type="application/pdf", filename=doc.get("original_name") or filename)
+
+
+@app.get("/api/submissions")
+def list_document_submissions(current_user=Depends(require_active_user)):
+    if current_user.get("role") == "admin":
+        docs = database.listar_documentos(status="pendente")
+    else:
+        docs = database.listar_documentos(uploaded_by=current_user["id"])
+    return {"submissions": docs, "pending_count": database.contar_documentos_pendentes()}
+
+
+@app.get("/api/submissions/{document_id}/raw")
+def view_raw_submission(document_id: int, user_id: Optional[int] = None, x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
+    current_user = require_active_user(x_user_id or user_id)
+    doc = database.obter_documento_por_id(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+    if current_user.get("role") != "admin" and doc.get("uploaded_by") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Acesso negado")
+    root = DATA_DIR if doc.get("status") == "aprovado" else RAW_UPLOADS_DIR
+    _, file_path = resolve_managed_file(root, doc.get("raw_filename") or doc["filename"])
+    return FileResponse(file_path, media_type="application/pdf", filename=doc.get("original_name") or doc["filename"])
+
+
+@app.get("/api/submissions/{document_id}/processed")
+def view_processed_submission(document_id: int, user_id: Optional[int] = None, x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
+    current_user = require_active_user(x_user_id or user_id)
+    doc = database.obter_documento_por_id(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+    if current_user.get("role") not in {"admin", "editor"} and doc.get("uploaded_by") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Acesso negado")
+    processed_name = doc.get("processed_filename") or doc["filename"]
+    processed_path = PROCESSED_UPLOADS_DIR / processed_name
+    root = PROCESSED_UPLOADS_DIR if processed_path.exists() else DATA_DIR
+    _, file_path = resolve_managed_file(root, processed_name)
+    return FileResponse(file_path, media_type="application/pdf", filename=doc.get("original_name") or doc["filename"])
+
+
+@app.post("/api/submissions/{document_id}/approve")
+def approve_submission(document_id: int, background_tasks: BackgroundTasks = None, admin_user=Depends(require_admin)):
+    doc = database.obter_documento_por_id(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+    _, processed_path = resolve_managed_file(PROCESSED_UPLOADS_DIR, doc.get("processed_filename") or doc["filename"])
+    dest_path = DATA_DIR / doc["filename"]
+    os.makedirs(DATA_DIR, exist_ok=True)
+    shutil.copyfile(processed_path, dest_path)
+
+    result = database.atualizar_status_documento(doc["filename"], "aprovado", approved_by=admin_user["id"])
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+
+    meta = load_docs_metadata()
+    meta[doc["filename"]] = {"active": True, "title": doc["title"], "description": doc.get("description", "")}
+    save_docs_metadata(meta)
+
+    if background_tasks is not None:
+        background_tasks.add_task(rebuild_index, file_paths=[str(dest_path)])
+    else:
+        rebuild_index(file_paths=[str(dest_path)])
+    return {"message": "Documento aprovado", "document": result["document"]}
+
+
+@app.post("/api/submissions/{document_id}/reject")
+def reject_submission(document_id: int, request: RejectDocumentRequest, admin_user=Depends(require_admin)):
+    doc = database.obter_documento_por_id(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+    if not request.feedback.strip():
+        raise HTTPException(status_code=400, detail="Informe o motivo da reprovaÃ§Ã£o")
+    result = database.atualizar_status_documento(doc["filename"], "reprovado", feedback=request.feedback)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return {"message": "Documento reprovado", "document": result["document"]}
+
+
+@app.post("/api/submissions/{document_id}/resubmit")
+def resubmit_submission(
+    document_id: int,
+    file: UploadFile = File(...),
+    current_user=Depends(require_active_user),
+):
+    doc = database.obter_documento_por_id(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+    if doc.get("uploaded_by") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Acesso negado")
+    if doc.get("status") != "reprovado":
+        raise HTTPException(status_code=400, detail="Somente documentos reprovados podem ser reenviados")
+    if int(doc.get("resubmission_count") or 0) >= 1:
+        raise HTTPException(status_code=400, detail="Limite de reenvio atingido para esta solicitaÃ§Ã£o")
+
+    filename = doc["filename"]
+    raw_path = RAW_UPLOADS_DIR / filename
+    processed_path = PROCESSED_UPLOADS_DIR / filename
+    os.makedirs(RAW_UPLOADS_DIR, exist_ok=True)
+    os.makedirs(PROCESSED_UPLOADS_DIR, exist_ok=True)
+
+    with open(raw_path, "wb") as out:
+        shutil.copyfileobj(file.file, out)
+    process_document_template(raw_path, processed_path)
+
+    stat = processed_path.stat()
+    result = database.reenviar_documento_reprovado(
+        document_id=document_id,
+        filename=filename,
+        original_name=file.filename,
+        title=Path(file.filename).stem,
+        size=stat.st_size,
+        mtime=int(stat.st_mtime),
+    )
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return {"message": "SolicitaÃ§Ã£o reenviada para aprovaÃ§Ã£o", "document": result["document"]}
+
+
+@app.get("/api/notifications")
+def notifications(current_user=Depends(require_active_user)):
+    if current_user.get("role") == "admin":
+        docs = database.listar_documentos(status="pendente")
+        docs.sort(key=lambda doc: doc.get("updated_at") or doc.get("created_at") or "", reverse=True)
+        return {"pending_documents": database.contar_documentos_pendentes(), "items": docs}
+
+    docs = [
+        doc for doc in database.listar_documentos(uploaded_by=current_user["id"])
+        if doc.get("status") in {"aprovado", "reprovado"}
+    ]
+    docs.sort(key=lambda doc: doc.get("updated_at") or doc.get("created_at") or "", reverse=True)
+    return {"pending_documents": 0, "items": docs}
 
 
 @app.get("/api/templates")
@@ -829,15 +1097,17 @@ def upload_admin_document(
     title: Optional[str] = Form(default=None),
     description: Optional[str] = Form(default=None),
     background_tasks: BackgroundTasks = None,
-    admin_user=Depends(require_admin),
+    admin_user=Depends(require_pdf_manager),
 ):
     try:
-        filename = os.path.basename(file.filename)
+        filename = unique_pdf_filename(file.filename)
         dest_path = DATA_DIR / filename
         os.makedirs(DATA_DIR, exist_ok=True)
 
         with open(dest_path, 'wb') as out:
             shutil.copyfileobj(file.file, out)
+        os.makedirs(PROCESSED_UPLOADS_DIR, exist_ok=True)
+        process_document_template(dest_path, PROCESSED_UPLOADS_DIR / filename)
 
         meta = load_docs_metadata()
         meta[filename] = {"active": True, "title": title or Path(filename).stem, "description": description or ""}
@@ -849,6 +1119,10 @@ def upload_admin_document(
             title=title,
             description=description,
             uploaded_by=admin_user["id"],
+            status="aprovado",
+            raw_filename=filename,
+            processed_filename=filename,
+            approved_by=admin_user["id"],
         )
 
         if background_tasks is not None:
@@ -863,7 +1137,7 @@ def upload_admin_document(
 
 
 @app.put("/api/docs/{filename}")
-def update_document(filename: str, request: DocumentUpdateRequest, background_tasks: BackgroundTasks = None, admin_user=Depends(require_admin)):
+def update_document(filename: str, request: DocumentUpdateRequest, background_tasks: BackgroundTasks = None, admin_user=Depends(require_pdf_manager)):
     safe_filename, _ = resolve_data_file(filename)
     result = database.atualizar_documento(
         filename=safe_filename,
@@ -917,7 +1191,7 @@ def reindex_file(filename: str, background_tasks: BackgroundTasks = None, admin_
 
 
 @app.post("/api/docs/{filename}/toggle")
-def toggle_file(filename: str, background_tasks: BackgroundTasks = None, admin_user=Depends(require_admin)):
+def toggle_file(filename: str, background_tasks: BackgroundTasks = None, admin_user=Depends(require_pdf_manager)):
     safe_filename, _ = resolve_data_file(filename)
     result = database.alternar_documento(safe_filename)
     if not result["success"]:
@@ -944,7 +1218,7 @@ def toggle_file(filename: str, background_tasks: BackgroundTasks = None, admin_u
 
 
 @app.delete("/api/docs/{filename}")
-def delete_file(filename: str, background_tasks: BackgroundTasks = None, admin_user=Depends(require_admin)):
+def delete_file(filename: str, background_tasks: BackgroundTasks = None, admin_user=Depends(require_pdf_manager)):
     safe_filename, file_path = resolve_data_file(filename)
     try:
         file_path.unlink()
