@@ -22,6 +22,9 @@ torch
 fastapi
 uvicorn
 
+# Template engine
+jinja2
+
 # Banco de Dados Vetorial
 chromadb
 llama-index-vector-stores-chroma

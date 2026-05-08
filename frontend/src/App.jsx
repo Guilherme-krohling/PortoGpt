@@ -6,7 +6,10 @@ import {
   Brain,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronUp,
   Clock,
+  Code2,
   Database,
   Eye,
   FileText,
@@ -21,6 +24,8 @@ import {
   PanelLeftOpen,
   Pencil,
   Plus,
+  RefreshCw,
+  Save,
   Search,
   Send,
   Shield,
@@ -86,6 +91,14 @@ const emptyTemplateForm = {
   description: '',
   active: true,
 }
+
+const TEMPLATE_CATEGORIES = ['Relatório', 'Ofício', 'Memorando', 'Declaração', 'Contrato', 'Outro']
+
+const TEMPLATE_FIELD_TYPES = [
+  { value: 'text', label: 'Texto curto' },
+  { value: 'paragraph', label: 'Parágrafo' },
+  { value: 'table', label: 'Tabela' },
+]
 
 const defaultAiSettings = {
   strict_documents_only: true,
@@ -1746,6 +1759,8 @@ function TemplateManagementPage({ currentUser }) {
   const [search, setSearch] = useState('')
   const [modalMode, setModalMode] = useState(null)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [editorTemplate, setEditorTemplate] = useState(null)
 
   const loadTemplates = useCallback(async () => {
     setLoading(true)
@@ -1793,6 +1808,46 @@ function TemplateManagementPage({ currentUser }) {
   const closeModal = () => {
     setSelectedTemplate(null)
     setModalMode(null)
+  }
+
+  const openHtmlEditor = async (tpl) => {
+    try {
+      const payload = await apiRequest(`/templates/${encodeURIComponent(tpl.filename)}/html`, {
+        userId: currentUser.id,
+      })
+      setEditorTemplate({ ...tpl, html: payload.html })
+    } catch {
+      // Arquivo novo ainda não existe no servidor — usa HTML gerado localmente
+      setEditorTemplate({ ...tpl, html: tpl._html || generateDefaultHtml(tpl) })
+    }
+  }
+
+  const handleCreateTemplate = async (formData) => {
+    const html = generateTemplateHtml(formData)
+    const payload = await apiRequest('/templates/create', {
+      method: 'POST',
+      userId: currentUser.id,
+      body: { name: formData.name, html, description: `${formData.category} criado via formulário` },
+    })
+    setCreateModalOpen(false)
+    await loadTemplates()
+    setEditorTemplate({ ...payload.template, html })
+  }
+
+  const handleSaveHtml = async (html) => {
+    if (!editorTemplate) return
+    try {
+      await apiRequest(`/templates/${encodeURIComponent(editorTemplate.filename)}/html`, {
+        method: 'PUT',
+        userId: currentUser.id,
+        body: { html },
+      })
+      await loadTemplates()
+      setNotice('HTML do template salvo com sucesso.')
+      setEditorTemplate(null)
+    } catch (err) {
+      setError(err.message)
+    }
   }
 
   const uploadTemplate = async (formData) => {
@@ -1914,6 +1969,10 @@ function TemplateManagementPage({ currentUser }) {
           <Database size={17} />
           Atualizar lista
         </button>
+        <button className="primary-btn" onClick={() => setCreateModalOpen(true)}>
+          <Plus size={17} />
+          Criar template
+        </button>
       </div>
 
       {error && (
@@ -1955,7 +2014,10 @@ function TemplateManagementPage({ currentUser }) {
               </div>
 
               <div className="document-actions">
-                <button className="icon-btn small" onClick={() => openEditModal(tpl)} aria-label="Editar template">
+                <button className="icon-btn small" onClick={() => openHtmlEditor(tpl)} aria-label="Editar HTML do template" title="Editar HTML">
+                  <Code2 size={16} />
+                </button>
+                <button className="icon-btn small" onClick={() => openEditModal(tpl)} aria-label="Editar template" title="Editar metadados">
                   <Pencil size={16} />
                 </button>
                 <button className="icon-btn small" onClick={() => toggleTemplate(tpl)} aria-label={tpl.active ? 'Desativar template' : 'Ativar template'}>
@@ -1975,6 +2037,22 @@ function TemplateManagementPage({ currentUser }) {
           initialTemplate={selectedTemplate}
           onClose={closeModal}
           onSave={modalMode === 'upload' ? uploadTemplate : updateTemplate}
+        />
+      )}
+
+      {createModalOpen && (
+        <CreateTemplateModal
+          onClose={() => setCreateModalOpen(false)}
+          onCreate={handleCreateTemplate}
+        />
+      )}
+
+      {editorTemplate && (
+        <TemplateEditorView
+          template={editorTemplate}
+          onBack={() => setEditorTemplate(null)}
+          onSave={handleSaveHtml}
+          currentUser={currentUser}
         />
       )}
     </div>
@@ -2080,6 +2158,420 @@ function TemplateModal({ initialTemplate, mode, onClose, onSave }) {
           </button>
         </div>
       </form>
+    </div>
+  )
+}
+
+function generateDefaultHtml(tpl) {
+  const title = tpl.title || tpl.filename?.replace(/\.[^.]+$/, '') || 'Template'
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; }
+    header { display: flex; align-items: center; padding: 18px 40px; border-bottom: 2px solid #0b4fd8; position: relative; }
+    .logo-ph { height: 48px; width: 80px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 10pt; border-radius: 4px; flex-shrink: 0; }
+    .company { position: absolute; left: 0; right: 0; text-align: center; font-size: 18pt; font-weight: 700; color: #0b4fd8; pointer-events: none; }
+    .doc-title { text-align: center; padding: 28px 40px 12px; font-size: 16pt; font-weight: 700; }
+    main { padding: 0 40px 40px; }
+    .field { margin-bottom: 22px; }
+    .field-label { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #0b4fd8; margin-bottom: 6px; }
+    .field-value { font-size: 11pt; color: #333; line-height: 1.6; }
+    footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 40px; border-top: 1px solid #ddd; }
+    .footer-ph { height: 28px; width: 48px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-size: 8pt; border-radius: 3px; }
+    .page-num { font-size: 9pt; color: #888; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo-ph">LOGO</div>
+    <span class="company">{{ company_name }}</span>
+  </header>
+
+  <h1 class="doc-title">${title}</h1>
+
+  <main>
+    <section class="field">
+      <h3 class="field-label">Campo 1</h3>
+      <span class="field-value">{{ campo_1 }}</span>
+    </section>
+
+    <section class="field">
+      <h3 class="field-label">Conteúdo</h3>
+      <p class="field-value">{{ conteudo }}</p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-ph">LOGO</div>
+    <span class="page-num">Página {{ page_number }} de {{ total_pages }}</span>
+  </footer>
+</body>
+</html>`
+}
+
+function generateTemplateHtml({ name, category, header, footer, fields }) {
+  const makeVar = (label) =>
+    label
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/\s+/g, '_')
+      .replace(/[^a-z0-9_]/g, '') || 'campo'
+
+  const fieldHtml = fields
+    .map((f) => {
+      const v = makeVar(f.label)
+      const val =
+        f.type === 'paragraph'
+          ? `<p class="field-value">{{ ${v} }}</p>`
+          : f.type === 'table'
+          ? `<table class="field-table">\n        {% for row in ${v}_rows %}\n        <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>\n        {% endfor %}\n      </table>`
+          : `<span class="field-value">{{ ${v} }}</span>`
+      return `    <section class="field">\n      <h3 class="field-label">${f.label || 'Campo'}</h3>\n      ${val}\n    </section>`
+    })
+    .join('\n\n')
+
+  const logoSrc = header.logoDataUrl || null
+  const logoHtml = logoSrc
+    ? `<img src="${logoSrc}" class="header-logo" alt="Logo" />`
+    : `<div class="logo-ph">LOGO</div>`
+
+  const footerLogoHtml =
+    footer.logoPosition !== 'none'
+      ? logoSrc
+        ? `<img src="${logoSrc}" class="footer-logo" alt="Logo" />`
+        : `<div class="footer-ph">LOGO</div>`
+      : ''
+
+  const pageHtml =
+    footer.pagination === 'Sem paginação'
+      ? ''
+      : footer.pagination === 'Página X de Y'
+      ? `<span class="page-num">Página {{ page_number }} de {{ total_pages }}</span>`
+      : `<span class="page-num">Página {{ page_number }}</span>`
+
+  const footerJustify = footer.logoPosition === 'right' ? 'flex-end' : 'space-between'
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; }
+    header { display: flex; align-items: center; padding: 18px 40px; border-bottom: 2px solid #0b4fd8; position: relative; }
+    .header-logo { height: 48px; max-width: 120px; object-fit: contain; }
+    .logo-ph { height: 48px; width: 80px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 10pt; border-radius: 4px; flex-shrink: 0; }
+    .company { position: absolute; left: 0; right: 0; text-align: center; font-size: 18pt; font-weight: 700; color: #0b4fd8; pointer-events: none; }
+    .doc-title { text-align: center; padding: 28px 40px 12px; font-size: 16pt; font-weight: 700; }
+    .doc-category { text-align: center; font-size: 10pt; color: #666; margin-bottom: 28px; }
+    main { padding: 0 40px 40px; }
+    .field { margin-bottom: 22px; }
+    .field-label { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #0b4fd8; margin-bottom: 6px; }
+    .field-value { font-size: 11pt; color: #333; line-height: 1.6; }
+    .field-table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+    .field-table td { border: 1px solid #ddd; padding: 6px 10px; }
+    footer { display: flex; align-items: center; justify-content: ${footerJustify}; padding: 12px 40px; border-top: 1px solid #ddd; }
+    .footer-logo { height: 32px; max-width: 80px; object-fit: contain; }
+    .footer-ph { height: 32px; width: 56px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-size: 8pt; border-radius: 3px; }
+    .page-num { font-size: 9pt; color: #888; }
+  </style>
+</head>
+<body>
+  <header>
+    ${logoHtml}
+    <span class="company">${header.companyName || '{{ company_name }}'}</span>
+  </header>
+
+  <h1 class="doc-title">${name || '{{ titulo }}'}</h1>
+  <p class="doc-category">${category}</p>
+
+  <main>
+${fieldHtml}
+  </main>
+
+  <footer>
+    ${footer.logoPosition !== 'right' ? footerLogoHtml : ''}
+    ${pageHtml}
+    ${footer.logoPosition === 'right' ? footerLogoHtml : ''}
+  </footer>
+</body>
+</html>`
+}
+
+function CreateTemplateModal({ onClose, onCreate }) {
+  const [name, setName] = useState('')
+  const [category, setCategory] = useState('Relatório')
+  const [headerOpen, setHeaderOpen] = useState(true)
+  const [footerOpen, setFooterOpen] = useState(true)
+  const [headerData, setHeaderData] = useState({ logoDataUrl: '', companyName: 'Nome da Empresa' })
+  const [footerData, setFooterData] = useState({ pagination: 'Página X de Y', logoPosition: 'left' })
+  const [fields, setFields] = useState([
+    { id: 1, label: 'Título', type: 'text' },
+    { id: 2, label: 'Conteúdo', type: 'paragraph' },
+  ])
+  const [nextId, setNextId] = useState(3)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+
+  const addField = () => {
+    setFields((prev) => [...prev, { id: nextId, label: '', type: 'text' }])
+    setNextId((prev) => prev + 1)
+  }
+
+  const removeField = (id) => setFields((prev) => prev.filter((f) => f.id !== id))
+
+  const updateFieldProp = (id, key, val) =>
+    setFields((prev) => prev.map((f) => (f.id === id ? { ...f, [key]: val } : f)))
+
+  const handleLogoChange = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => setHeaderData((h) => ({ ...h, logoDataUrl: ev.target.result }))
+    reader.readAsDataURL(file)
+  }
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    setSubmitting(true)
+    setSubmitError('')
+    try {
+      await onCreate({ name: name.trim(), category, header: headerData, footer: footerData, fields })
+    } catch (err) {
+      setSubmitError(err.message || 'Erro ao criar template. Verifique se o servidor está ativo.')
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="overlay" role="dialog" aria-modal="true">
+      <form className="modal ct-modal" onSubmit={submit}>
+        <button className="modal-close" type="button" onClick={onClose} aria-label="Fechar">
+          <X size={18} />
+        </button>
+        <h2>Criar template</h2>
+
+        <div className="modal-grid">
+          <label>
+            Nome do template
+            <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="Ex: Relatório Mensal" />
+          </label>
+          <label>
+            Categoria
+            <select value={category} onChange={(e) => setCategory(e.target.value)}>
+              {TEMPLATE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="ct-section">
+          <button type="button" className="ct-toggle" onClick={() => setHeaderOpen((o) => !o)}>
+            <span>Cabeçalho</span>
+            <span className="ct-hint">pré-preenchido · editável</span>
+            {headerOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          </button>
+          {headerOpen && (
+            <div className="ct-body">
+              <label className="ct-logo-picker">
+                Logo da empresa (PNG, JPG, SVG)
+                <input type="file" accept="image/*" onChange={handleLogoChange} />
+                {headerData.logoDataUrl && (
+                  <img src={headerData.logoDataUrl} alt="Logo preview" className="ct-logo-preview" />
+                )}
+              </label>
+              <label className="ct-company-label">
+                Nome da empresa
+                <input
+                  className="ct-company-input"
+                  value={headerData.companyName}
+                  onChange={(e) => setHeaderData((h) => ({ ...h, companyName: e.target.value }))}
+                />
+              </label>
+            </div>
+          )}
+        </div>
+
+        <div className="ct-section">
+          <div className="ct-fields-header">
+            <span>Campos do documento</span>
+            <button type="button" className="ghost-btn ct-add-btn" onClick={addField}>
+              <Plus size={14} />
+              Adicionar campo
+            </button>
+          </div>
+          <div className="ct-fields-list">
+            {fields.map((f, i) => (
+              <div key={f.id} className="ct-field-row">
+                <span className="ct-field-index">{i + 1}</span>
+                <input
+                  className="ct-field-label-input"
+                  value={f.label}
+                  onChange={(e) => updateFieldProp(f.id, 'label', e.target.value)}
+                  placeholder="Rótulo (ex: Destinatário)"
+                />
+                <select
+                  className="ct-field-type-select"
+                  value={f.type}
+                  onChange={(e) => updateFieldProp(f.id, 'type', e.target.value)}
+                >
+                  {TEMPLATE_FIELD_TYPES.map((ft) => (
+                    <option key={ft.value} value={ft.value}>
+                      {ft.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="icon-btn small danger"
+                  onClick={() => removeField(f.id)}
+                  disabled={fields.length === 1}
+                  aria-label="Remover campo"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="ct-section">
+          <button type="button" className="ct-toggle" onClick={() => setFooterOpen((o) => !o)}>
+            <span>Rodapé</span>
+            <span className="ct-hint">pré-preenchido · editável</span>
+            {footerOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          </button>
+          {footerOpen && (
+            <div className="ct-body modal-grid">
+              <label>
+                Paginação
+                <select value={footerData.pagination} onChange={(e) => setFooterData((f) => ({ ...f, pagination: e.target.value }))}>
+                  <option>Página X de Y</option>
+                  <option>Página X</option>
+                  <option>Sem paginação</option>
+                </select>
+              </label>
+              <label>
+                Logo no rodapé
+                <select value={footerData.logoPosition} onChange={(e) => setFooterData((f) => ({ ...f, logoPosition: e.target.value }))}>
+                  <option value="left">Esquerda</option>
+                  <option value="right">Direita</option>
+                  <option value="none">Sem logo</option>
+                </select>
+              </label>
+            </div>
+          )}
+        </div>
+
+        {submitError && (
+          <div className="form-alert">
+            <AlertCircle size={16} />
+            {submitError}
+          </div>
+        )}
+
+        <div className="confirm-row">
+          <button className="ghost-btn" type="button" onClick={onClose} disabled={submitting}>
+            Cancelar
+          </button>
+          <button className="primary-btn" type="submit" disabled={submitting}>
+            <Check size={16} />
+            {submitting ? 'Salvando...' : 'Criar e abrir editor'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function TemplateEditorView({ template, onBack, onSave, currentUser }) {
+  const [html, setHtml] = useState(template.html)
+  const [previewSrc, setPreviewSrc] = useState('')
+  const [compiling, setCompiling] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const prevBlobUrl = useRef(null)
+
+  function compileLocal(source) {
+    if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current)
+    const blob = new Blob([source], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    prevBlobUrl.current = url
+    setPreviewSrc(url)
+  }
+
+  async function compileFromServer() {
+    setCompiling(true)
+    try {
+      const rendered = await apiRequest(`/templates/${encodeURIComponent(template.filename)}/preview`, {
+        method: 'POST',
+        userId: currentUser.id,
+      })
+      if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current)
+      const blob = new Blob([rendered], { type: 'text/html' })
+      const url = URL.createObjectURL(blob)
+      prevBlobUrl.current = url
+      setPreviewSrc(url)
+    } catch {
+      compileLocal(html)
+    } finally {
+      setCompiling(false)
+    }
+  }
+
+  useEffect(() => {
+    compileLocal(template.html)
+    return () => {
+      if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSave = async () => {
+    setSaving(true)
+    await onSave(html)
+    setSaving(false)
+  }
+
+  return (
+    <div className="tpl-editor-overlay">
+      <div className="tpl-editor-topbar">
+        <button className="ghost-btn" onClick={onBack}>
+          <ChevronLeft size={17} />
+          Voltar
+        </button>
+        <span className="tpl-editor-name">{template.title}</span>
+        <button className="primary-btn" onClick={handleSave} disabled={saving}>
+          <Save size={16} />
+          {saving ? 'Salvando...' : 'Salvar template'}
+        </button>
+      </div>
+
+      <div className="tpl-editor-body">
+        <div className="tpl-editor-pane tpl-editor-code">
+          <textarea
+            className="tpl-html-textarea"
+            value={html}
+            onChange={(e) => setHtml(e.target.value)}
+            spellCheck={false}
+          />
+        </div>
+        <div className="tpl-editor-pane tpl-editor-preview">
+          <div className="tpl-preview-bar">
+            <button className="ghost-btn" onClick={compileFromServer} disabled={compiling}>
+              <RefreshCw size={15} className={compiling ? 'spin' : ''} />
+              {compiling ? 'Compilando...' : 'Recompilar'}
+            </button>
+          </div>
+          <iframe src={previewSrc} className="tpl-preview-iframe" title="Preview do template" />
+        </div>
+      </div>
     </div>
   )
 }

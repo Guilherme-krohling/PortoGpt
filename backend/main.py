@@ -1,9 +1,10 @@
 import os
+import re
 import chromadb
 import ingest
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi import BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
@@ -15,6 +16,8 @@ import sys
 import json as json_module
 import time
 from typing import Optional
+from jinja2 import Environment, BaseLoader, Undefined
+from groq import Groq as GroqDirect
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -141,6 +144,20 @@ class DocumentUpdateRequest(BaseModel):
     title: str
     description: str = ""
     active: bool = True
+
+
+class CreateTemplateRequest(BaseModel):
+    name: str
+    html: str
+    description: Optional[str] = None
+
+
+class SaveHtmlRequest(BaseModel):
+    html: str
+
+
+class ApplyTemplateRequest(BaseModel):
+    pdf_text: str
 
 
 def require_admin(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
@@ -821,6 +838,221 @@ def delete_template(filename: str, admin_user=Depends(require_admin)):
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail="Erro ao deletar template")
+
+
+# ========== TEMPLATES — CRIAR / EDITAR HTML / PREVIEW / APPLY ==========
+
+@app.post("/api/templates/create")
+def create_template(request: CreateTemplateRequest, admin_user=Depends(require_admin)):
+    """Cria um template Jinja2 a partir do HTML gerado pelo formulário."""
+    os.makedirs(TEMPLATES_DIR, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9_]", "", re.sub(r"\s+", "_", request.name.lower().strip()))
+    if not slug:
+        slug = "template"
+    filename = f"{slug}.html"
+    dest_path = TEMPLATES_DIR / filename
+
+    # Evita sobreescrever: adiciona sufixo numérico se já existir
+    counter = 1
+    while dest_path.exists():
+        filename = f"{slug}_{counter}.html"
+        dest_path = TEMPLATES_DIR / filename
+        counter += 1
+
+    dest_path.write_text(request.html, encoding="utf-8")
+    template = register_saved_template(
+        filename=filename,
+        original_name=filename,
+        file_path=dest_path,
+        title=request.name,
+        description=request.description or f"Template criado via formulário",
+        uploaded_by=admin_user["id"],
+    )
+    return {"message": "Template criado com sucesso", "template": template}
+
+
+DEFAULT_TEMPLATE_HTML = (
+    '<!DOCTYPE html>\n'
+    '<html lang="pt-BR">\n'
+    '<head>\n'
+    '  <meta charset="UTF-8" />\n'
+    '  <style>\n'
+    '    * { box-sizing: border-box; margin: 0; padding: 0; }\n'
+    '    body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; }\n'
+    '    header { display: flex; align-items: center; padding: 18px 40px; border-bottom: 2px solid #0b4fd8; position: relative; }\n'
+    '    .logo-ph { height: 48px; width: 80px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 10pt; border-radius: 4px; flex-shrink: 0; }\n'
+    '    .company { position: absolute; left: 0; right: 0; text-align: center; font-size: 18pt; font-weight: 700; color: #0b4fd8; pointer-events: none; }\n'
+    '    .doc-title { text-align: center; padding: 28px 40px 12px; font-size: 16pt; font-weight: 700; }\n'
+    '    main { padding: 0 40px 40px; }\n'
+    '    .field { margin-bottom: 22px; }\n'
+    '    .field-label { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #0b4fd8; margin-bottom: 6px; }\n'
+    '    .field-value { font-size: 11pt; color: #333; line-height: 1.6; }\n'
+    '    footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 40px; border-top: 1px solid #ddd; }\n'
+    '    .footer-ph { height: 28px; width: 48px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-size: 8pt; border-radius: 3px; }\n'
+    '    .page-num { font-size: 9pt; color: #888; }\n'
+    '  </style>\n'
+    '</head>\n'
+    '<body>\n'
+    '  <header>\n'
+    '    <div class="logo-ph">LOGO</div>\n'
+    '    <span class="company">{{ company_name }}</span>\n'
+    '  </header>\n'
+    '  <h1 class="doc-title">{{ titulo }}</h1>\n'
+    '  <main>\n'
+    '    <section class="field">\n'
+    '      <h3 class="field-label">Campo 1</h3>\n'
+    '      <span class="field-value">{{ campo_1 }}</span>\n'
+    '    </section>\n'
+    '    <section class="field">\n'
+    '      <h3 class="field-label">Conteúdo</h3>\n'
+    '      <p class="field-value">{{ conteudo }}</p>\n'
+    '    </section>\n'
+    '  </main>\n'
+    '  <footer>\n'
+    '    <div class="footer-ph">LOGO</div>\n'
+    '    <span class="page-num">Página {{ page_number }} de {{ total_pages }}</span>\n'
+    '  </footer>\n'
+    '</body>\n'
+    '</html>'
+)
+
+
+@app.get("/api/templates/{filename}/html")
+def get_template_html(filename: str, admin_user=Depends(require_admin)):
+    """Retorna o conteúdo HTML de um template para edição."""
+    safe_filename, file_path = resolve_template_file(filename)
+
+    # Arquivos não-HTML (PDFs, DOCXs enviados por upload) não têm HTML editável;
+    # retorna um template padrão para o usuário começar a editar.
+    if file_path.suffix.lower() != ".html":
+        title = file_path.stem
+        default_html = DEFAULT_TEMPLATE_HTML.replace("{{{{ titulo }}}}", f"{{{{{title}}}}}")
+        return {"filename": safe_filename, "html": default_html, "is_default": True}
+
+    try:
+        html = file_path.read_text(encoding="utf-8")
+        return {"filename": safe_filename, "html": html, "is_default": False}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler template: {e}")
+
+
+@app.put("/api/templates/{filename}/html")
+def save_template_html(filename: str, request: SaveHtmlRequest, admin_user=Depends(require_admin)):
+    """Salva o HTML editado de um template preservando os metadados existentes."""
+    safe_filename, file_path = resolve_template_file(filename)
+    try:
+        file_path.write_text(request.html, encoding="utf-8")
+        stat = file_path.stat()
+
+        # Preserva title e description existentes
+        existing = database.obter_template(safe_filename)
+        database.atualizar_template(
+            filename=safe_filename,
+            title=existing["title"] if existing else Path(safe_filename).stem,
+            description=existing["description"] if existing else "",
+            active=existing["active"] if existing else True,
+        )
+        return {"message": "HTML salvo com sucesso", "filename": safe_filename, "size": stat.st_size}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar HTML: {e}")
+
+
+@app.post("/api/templates/{filename}/preview")
+def preview_template(filename: str, admin_user=Depends(require_admin)):
+    """Renderiza o template com valores de exemplo e retorna o HTML resultante."""
+    safe_filename, file_path = resolve_template_file(filename)
+    try:
+        source = file_path.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler template: {e}")
+
+    # Extrai todas as variáveis {{ var }} do template
+    variables = list(dict.fromkeys(re.findall(r"\{\{\s*(\w+)\s*\}\}", source)))
+
+    # Valores de exemplo estáticos
+    sample_map = {
+        "company_name": "Porto S.A.",
+        "logo_url": "",
+        "page_number": "1",
+        "total_pages": "3",
+        "titulo": "Exemplo de Título",
+    }
+    sample = {v: sample_map.get(v, f"[{v.replace('_', ' ').title()}]") for v in variables}
+
+    try:
+        env = Environment(loader=BaseLoader(), undefined=Undefined)
+        tmpl = env.from_string(source)
+        rendered = tmpl.render(**sample)
+    except Exception as e:
+        rendered = source  # Retorna o source sem renderizar se houver erro de sintaxe
+
+    return HTMLResponse(content=rendered)
+
+
+@app.post("/api/templates/{filename}/apply")
+def apply_template(filename: str, request: ApplyTemplateRequest, admin_user=Depends(require_admin)):
+    """Extrai campos do PDF bruto e preenche o template Jinja2 com IA."""
+    safe_filename, file_path = resolve_template_file(filename)
+    try:
+        source = file_path.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler template: {e}")
+
+    # Extrai variáveis do template exceto as reservadas
+    RESERVED = {"page_number", "total_pages", "logo_url"}
+    variables = [
+        v for v in dict.fromkeys(re.findall(r"\{\{\s*(\w+)\s*\}\}", source))
+        if v not in RESERVED
+    ]
+
+    if not variables:
+        raise HTTPException(status_code=400, detail="Template não possui campos variáveis definidos")
+
+    # Monta prompt para o LLM extrair os campos do texto do PDF
+    fields_list = "\n".join(f"- {v}" for v in variables)
+    prompt = f"""Você receberá o texto extraído de um PDF e uma lista de campos de template.
+Sua tarefa é extrair os valores correspondentes do texto e retornar um JSON com esses campos preenchidos.
+Retorne APENAS o JSON, sem explicações adicionais.
+
+CAMPOS DO TEMPLATE:
+{fields_list}
+
+TEXTO DO PDF:
+{request.pdf_text[:6000]}
+
+Retorne um JSON com os campos acima preenchidos com os valores encontrados no texto.
+Se um campo não for encontrado, use uma string vazia.
+"""
+
+    api_key = os.getenv("secret_key")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Chave de API não configurada")
+
+    try:
+        groq_client = GroqDirect(api_key=api_key)
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
+        extracted = json.loads(response.choices[0].message.content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao extrair campos com IA: {e}")
+
+    # Adiciona valores reservados de paginação
+    extracted.setdefault("page_number", "1")
+    extracted.setdefault("total_pages", "1")
+    extracted.setdefault("logo_url", "")
+
+    try:
+        env = Environment(loader=BaseLoader())
+        tmpl = env.from_string(source)
+        rendered = tmpl.render(**extracted)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao renderizar template: {e}")
+
+    return {"html": rendered, "fields": extracted}
 
 
 @app.post("/api/docs/upload")
