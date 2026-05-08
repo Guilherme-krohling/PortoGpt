@@ -805,6 +805,8 @@ def upload_endpoint(
                 filename, file.filename, dest_path, uploaded_by=user["id"],
                 status="aprovado", raw_filename=filename, processed_filename=filename, approved_by=user["id"],
             )
+            database.registrar_evento_documento(document["id"], "inserido", "aprovado", "Upload pelo chat com aprovação automatica.", user["id"])
+            database.registrar_evento_documento(document["id"], "aprovado", "aprovado", "Documento publicado automaticamente por perfil interno.", user["id"])
         else:
             stat = processed_path.stat()
             result = database.registrar_documento(
@@ -823,6 +825,8 @@ def upload_endpoint(
             if not result["success"]:
                 raise HTTPException(status_code=500, detail=result["message"])
             document = result["document"]
+            database.registrar_evento_documento(document["id"], "enviado", "pendente", "Documento enviado pelo chat e encaminhado para aprovação.", user["id"])
+            database.registrar_evento_documento(document["id"], "processado", "pendente", "Previa formatada gerada pela etapa de templatização.", user["id"])
 
         # Reindex apenas o arquivo enviado — agendado em background para não bloquear
         if is_auto_approved:
@@ -836,7 +840,7 @@ def upload_endpoint(
         response = (
             f"Upload de {file.filename} aprovado automaticamente."
             if is_auto_approved
-            else f"Documento {file.filename} enviado para templatizacao e aprovacao do administrador."
+            else f"Documento {file.filename} enviado para templatização e aprovação do administrador."
         )
         chat_session_id = session_id
         if message is not None:
@@ -867,6 +871,8 @@ def list_docs(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")
     user = database.obter_usuario(x_user_id) if x_user_id else None
     if user and user.get("status") == "active" and user.get("role") in {"admin", "editor"}:
         files = database.listar_documentos()
+        for doc in files:
+            doc["history"] = database.listar_eventos_documento(doc["id"])
     else:
         files = [doc for doc in database.listar_documentos(status="aprovado") if doc.get("active")]
     return JSONResponse(content={"files": files})
@@ -884,15 +890,19 @@ def view_document_file(filename: str, user_id: Optional[int] = None, x_user_id: 
     if doc.get("status") != "aprovado" and not user:
         raise HTTPException(status_code=403, detail="Documento ainda nÃ£o aprovado")
     _, file_path = resolve_data_file(filename)
-    return FileResponse(file_path, media_type="application/pdf", filename=doc.get("original_name") or filename)
+    headers = {"Content-Disposition": f'inline; filename="{doc.get("original_name") or filename}"'}
+    return FileResponse(file_path, media_type="application/pdf", headers=headers)
 
 
 @app.get("/api/submissions")
 def list_document_submissions(current_user=Depends(require_active_user)):
     if current_user.get("role") == "admin":
-        docs = database.listar_documentos(status="pendente")
+        docs = [doc for doc in database.listar_documentos() if doc.get("uploaded_by")]
+        docs.sort(key=lambda doc: doc.get("updated_at") or doc.get("created_at") or "", reverse=True)
     else:
         docs = database.listar_documentos(uploaded_by=current_user["id"])
+    for doc in docs:
+        doc["history"] = database.listar_eventos_documento(doc["id"])
     return {"submissions": docs, "pending_count": database.contar_documentos_pendentes()}
 
 
@@ -906,7 +916,8 @@ def view_raw_submission(document_id: int, user_id: Optional[int] = None, x_user_
         raise HTTPException(status_code=403, detail="Acesso negado")
     root = DATA_DIR if doc.get("status") == "aprovado" else RAW_UPLOADS_DIR
     _, file_path = resolve_managed_file(root, doc.get("raw_filename") or doc["filename"])
-    return FileResponse(file_path, media_type="application/pdf", filename=doc.get("original_name") or doc["filename"])
+    headers = {"Content-Disposition": f'inline; filename="{doc.get("original_name") or doc["filename"]}"'}
+    return FileResponse(file_path, media_type="application/pdf", headers=headers)
 
 
 @app.get("/api/submissions/{document_id}/processed")
@@ -921,7 +932,8 @@ def view_processed_submission(document_id: int, user_id: Optional[int] = None, x
     processed_path = PROCESSED_UPLOADS_DIR / processed_name
     root = PROCESSED_UPLOADS_DIR if processed_path.exists() else DATA_DIR
     _, file_path = resolve_managed_file(root, processed_name)
-    return FileResponse(file_path, media_type="application/pdf", filename=doc.get("original_name") or doc["filename"])
+    headers = {"Content-Disposition": f'inline; filename="{doc.get("original_name") or doc["filename"]}"'}
+    return FileResponse(file_path, media_type="application/pdf", headers=headers)
 
 
 @app.post("/api/submissions/{document_id}/approve")
@@ -937,6 +949,7 @@ def approve_submission(document_id: int, background_tasks: BackgroundTasks = Non
     result = database.atualizar_status_documento(doc["filename"], "aprovado", approved_by=admin_user["id"])
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
+    database.registrar_evento_documento(document_id, "aprovado", "aprovado", "Documento aprovado e publicado na base.", admin_user["id"])
 
     meta = load_docs_metadata()
     meta[doc["filename"]] = {"active": True, "title": doc["title"], "description": doc.get("description", "")}
@@ -959,6 +972,7 @@ def reject_submission(document_id: int, request: RejectDocumentRequest, admin_us
     result = database.atualizar_status_documento(doc["filename"], "reprovado", feedback=request.feedback)
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
+    database.registrar_evento_documento(document_id, "reprovado", "reprovado", request.feedback, admin_user["id"])
     return {"message": "Documento reprovado", "document": result["document"]}
 
 
@@ -999,7 +1013,9 @@ def resubmit_submission(
     )
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
-    return {"message": "SolicitaÃ§Ã£o reenviada para aprovaÃ§Ã£o", "document": result["document"]}
+    database.registrar_evento_documento(document_id, "reenviado", "pendente", "Usuario reenviou a solicitacao para nova analise.", current_user["id"])
+    database.registrar_evento_documento(document_id, "processado", "pendente", "Nova previa formatada gerada pela etapa de templatizacao.", current_user["id"])
+    return {"message": "Solicitação reenviada para aprovação", "document": result["document"]}
 
 
 @app.get("/api/notifications")
@@ -1007,14 +1023,33 @@ def notifications(current_user=Depends(require_active_user)):
     if current_user.get("role") == "admin":
         docs = database.listar_documentos(status="pendente")
         docs.sort(key=lambda doc: doc.get("updated_at") or doc.get("created_at") or "", reverse=True)
-        return {"pending_documents": database.contar_documentos_pendentes(), "items": docs}
+        unread_docs = database.filtrar_notificacoes_nao_lidas(current_user["id"], docs)
+        return {"pending_documents": len(unread_docs), "items": unread_docs}
 
     docs = [
         doc for doc in database.listar_documentos(uploaded_by=current_user["id"])
         if doc.get("status") in {"aprovado", "reprovado"}
     ]
     docs.sort(key=lambda doc: doc.get("updated_at") or doc.get("created_at") or "", reverse=True)
+    docs = database.filtrar_notificacoes_nao_lidas(current_user["id"], docs)
     return {"pending_documents": 0, "items": docs}
+
+
+@app.post("/api/notifications/read")
+def read_notifications(current_user=Depends(require_active_user)):
+    if current_user.get("role") == "admin":
+        docs = database.listar_documentos(status="pendente")
+    elif current_user.get("role") == "editor":
+        docs = []
+    else:
+        docs = [
+            doc for doc in database.listar_documentos(uploaded_by=current_user["id"])
+            if doc.get("status") in {"aprovado", "reprovado"}
+        ]
+    result = database.marcar_notificacoes_lidas(current_user["id"], docs)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return {"message": "Notificações limpas"}
 
 
 @app.get("/api/templates")
@@ -1124,6 +1159,8 @@ def upload_admin_document(
             processed_filename=filename,
             approved_by=admin_user["id"],
         )
+        database.registrar_evento_documento(document["id"], "inserido", "aprovado", "PDF adicionado em Gerenciamento de PDFs.", admin_user["id"])
+        database.registrar_evento_documento(document["id"], "aprovado", "aprovado", "Documento entrou aprovado diretamente na base.", admin_user["id"])
 
         if background_tasks is not None:
             background_tasks.add_task(rebuild_index, file_paths=[str(dest_path)])
@@ -1147,6 +1184,7 @@ def update_document(filename: str, request: DocumentUpdateRequest, background_ta
     )
     if not result["success"]:
         raise HTTPException(status_code=404, detail=result["message"])
+    database.registrar_evento_documento(result["document"]["id"], "editado", result["document"].get("status"), "Metadados do PDF atualizados.", admin_user["id"])
 
     meta = load_docs_metadata()
     meta[safe_filename] = {
@@ -1198,6 +1236,13 @@ def toggle_file(filename: str, background_tasks: BackgroundTasks = None, admin_u
         raise HTTPException(status_code=404, detail=result["message"])
 
     document = result["document"]
+    database.registrar_evento_documento(
+        document["id"],
+        "ativado" if document["active"] else "inativado",
+        document.get("status"),
+        "PDF ativado na base da IA." if document["active"] else "PDF inativado na base da IA.",
+        admin_user["id"],
+    )
     meta = load_docs_metadata()
     meta[safe_filename] = {
         "active": document["active"],
@@ -1221,6 +1266,9 @@ def toggle_file(filename: str, background_tasks: BackgroundTasks = None, admin_u
 def delete_file(filename: str, background_tasks: BackgroundTasks = None, admin_user=Depends(require_pdf_manager)):
     safe_filename, file_path = resolve_data_file(filename)
     try:
+        doc = database.obter_documento(safe_filename)
+        if doc:
+            database.registrar_evento_documento(doc["id"], "excluido", doc.get("status"), "PDF removido de Gerenciamento de PDFs.", admin_user["id"])
         file_path.unlink()
         database.deletar_documento(safe_filename)
         meta = load_docs_metadata()

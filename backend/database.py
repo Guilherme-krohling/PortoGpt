@@ -68,6 +68,10 @@ def _row_to_document(row) -> Dict[str, Any]:
         "uploader_name": row[17] if len(row) > 17 else "",
         "uploader_email": row[18] if len(row) > 18 else "",
         "resubmission_count": row[19] if len(row) > 19 else 0,
+        "approved_by_name": row[20] if len(row) > 20 else "",
+        "approved_by_email": row[21] if len(row) > 21 else "",
+        "uploader_role": row[22] if len(row) > 22 else "",
+        "source": "chat" if (len(row) > 22 and row[22] == "viewer") else ("gerenciamento" if row[8] else "sistema"),
     }
 
 
@@ -287,6 +291,32 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS document_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            status TEXT,
+            message TEXT DEFAULT '',
+            user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notification_reads (
+            user_id INTEGER NOT NULL,
+            document_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, document_id, status),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
         )
     """)
 
@@ -727,9 +757,11 @@ def listar_documentos(status: Optional[str] = None, uploaded_by: Optional[int] =
                    d.uploaded_by, d.created_at, d.updated_at, COALESCE(d.status, 'aprovado'),
                    COALESCE(d.raw_filename, d.filename), COALESCE(d.processed_filename, d.filename),
                    COALESCE(d.feedback, ''), d.approved_by, d.approved_at,
-                   COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(d.resubmission_count, 0)
+                   COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(d.resubmission_count, 0),
+                   COALESCE(approver.name, ''), COALESCE(approver.email, ''), COALESCE(u.role, '')
             FROM documents d
             LEFT JOIN users u ON u.id = d.uploaded_by
+            LEFT JOIN users approver ON approver.id = d.approved_by
             {where_clause}
             ORDER BY CASE COALESCE(d.status, 'aprovado')
                 WHEN 'pendente' THEN 0
@@ -804,9 +836,11 @@ def obter_documento(filename: str) -> Optional[Dict[str, Any]]:
                    d.uploaded_by, d.created_at, d.updated_at, COALESCE(d.status, 'aprovado'),
                    COALESCE(d.raw_filename, d.filename), COALESCE(d.processed_filename, d.filename),
                    COALESCE(d.feedback, ''), d.approved_by, d.approved_at,
-                   COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(d.resubmission_count, 0)
+                   COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(d.resubmission_count, 0),
+                   COALESCE(approver.name, ''), COALESCE(approver.email, ''), COALESCE(u.role, '')
             FROM documents d
             LEFT JOIN users u ON u.id = d.uploaded_by
+            LEFT JOIN users approver ON approver.id = d.approved_by
             WHERE d.filename = ?
             """,
             (filename,),
@@ -1073,6 +1107,117 @@ def reenviar_documento_reprovado(
         return {"success": True, "document": obter_documento(filename)}
     except Exception as e:
         return {"success": False, "message": f"Erro ao reenviar documento: {str(e)}"}
+
+
+def registrar_evento_documento(
+    document_id: int,
+    event_type: str,
+    status: Optional[str] = None,
+    message: str = "",
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Registra a linha do tempo de uma solicitacao/documento."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO document_events (document_id, event_type, status, message, user_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (document_id, event_type, status, message.strip(), user_id, brasilia_now()),
+        )
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": f"Erro ao registrar evento: {str(e)}"}
+
+
+def listar_eventos_documento(document_id: int) -> List[Dict[str, Any]]:
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT e.id, e.document_id, e.event_type, COALESCE(e.status, ''),
+                   COALESCE(e.message, ''), e.user_id, e.created_at,
+                   COALESCE(u.name, ''), COALESCE(u.email, '')
+            FROM document_events e
+            LEFT JOIN users u ON u.id = e.user_id
+            WHERE e.document_id = ?
+            ORDER BY e.created_at ASC, e.id ASC
+            """,
+            (document_id,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "id": row[0],
+                "document_id": row[1],
+                "event_type": row[2],
+                "status": row[3],
+                "message": row[4],
+                "user_id": row[5],
+                "created_at": row[6],
+                "user_name": row[7],
+                "user_email": row[8],
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        print(f"Erro ao listar eventos do documento: {str(e)}")
+        return []
+
+
+def marcar_notificacoes_lidas(user_id: int, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        now = brasilia_now()
+        for item in items:
+            document_id = item.get("id")
+            status = item.get("status") or "pendente"
+            if not document_id:
+                continue
+            cursor.execute(
+                """
+                INSERT INTO notification_reads (user_id, document_id, status, read_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, document_id, status) DO UPDATE SET read_at = excluded.read_at
+                """,
+                (user_id, document_id, status, now),
+            )
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": f"Erro ao limpar notificacoes: {str(e)}"}
+
+
+def filtrar_notificacoes_nao_lidas(user_id: int, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not items:
+        return []
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        result = []
+        for item in items:
+            cursor.execute(
+                """
+                SELECT 1 FROM notification_reads
+                WHERE user_id = ? AND document_id = ? AND status = ?
+                """,
+                (user_id, item.get("id"), item.get("status") or "pendente"),
+            )
+            if not cursor.fetchone():
+                result.append(item)
+        conn.close()
+        return result
+    except Exception as e:
+        print(f"Erro ao filtrar notificacoes: {str(e)}")
+        return items
 
 
 def contar_documentos_pendentes() -> int:
