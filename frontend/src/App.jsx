@@ -62,7 +62,8 @@ const statusLabels = {
   pending: 'Pendente',
   pendente: 'Pendente',
   aprovado: 'Aprovado',
-  reprovado: 'Reprovado',
+    reprovado: 'Reprovado',
+    reenviado: 'Reenviado',
 }
 
 const roleIcons = {
@@ -497,7 +498,6 @@ function ChatSidebar({
       return [
         homeItem,
         { path: '/admin/dashboard', label: 'Administração', icon: Shield },
-        { path: '/solicitacoes', label: 'Minhas solicitações', icon: Clock },
       ]
     }
     return [
@@ -642,6 +642,16 @@ function TopBar({
   const notificationItems = notifications.items || []
   const unreadCount = isAdmin ? Number(notifications.pending_documents || 0) : notificationItems.length
   const showNotifications = currentUser.role !== 'editor'
+  const clearNotifications = async () => {
+    try {
+      await apiRequest('/notifications/read', { method: 'POST', userId: currentUser.id })
+    } catch {
+      // A limpeza visual continua mesmo se a persistencia falhar momentaneamente.
+    }
+    setNotifications({ pending_documents: 0, items: [] })
+    setNotificationOpen(false)
+    setNotificationClosedByClick(true)
+  }
 
   return (
     <div className="top-bar">
@@ -674,8 +684,11 @@ function TopBar({
           </button>
           <div className="notification-popover">
             <div className="notification-popover-head">
-              <strong>Notificações</strong>
-              <button onClick={() => onNavigate('/notificacoes')}>Ver todas</button>
+                <strong>Notificações</strong>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={clearNotifications}>Limpar</button>
+                  <button onClick={() => onNavigate('/notificacoes')}>Ver todas</button>
+                </div>
             </div>
             <div className="notification-popover-list">
               {notificationItems.length === 0 && <p>Nenhuma notificação nova.</p>}
@@ -1229,7 +1242,7 @@ function AdminDashboardPage({ currentUser, onNavigate }) {
             {!docs.recent?.length && <div className="empty-panel">Nenhuma movimentação recente.</div>}
             {docs.recent?.map((doc) => (
               <article key={doc.id}>
-                <StatusBadge status={doc.status} />
+                <StatusBadge status={(doc.resubmission_count || 0) > 0 && (doc.status === 'pendente' || doc.status === 'pending') ? 'reenviado' : (doc.status || (doc.active ? 'aprovado' : 'inactive'))} />
                 <div>
                   <strong>{doc.title}</strong>
                   <span>{doc.uploader_name || doc.uploader_email || 'Sistema'} · {formatDateTime(doc.updated_at || doc.created_at)}</span>
@@ -1755,6 +1768,7 @@ function PdfManagementPage({ currentUser }) {
   const [search, setSearch] = useState('')
   const [modalMode, setModalMode] = useState(null)
   const [selectedDocument, setSelectedDocument] = useState(null)
+  const [historyDocument, setHistoryDocument] = useState(null)
   const canReindex = currentUser.role === 'admin'
 
   const loadDocs = useCallback(async () => {
@@ -1980,7 +1994,7 @@ function PdfManagementPage({ currentUser }) {
                 <div className="document-icon">
                   <FileText size={22} />
                 </div>
-                <StatusBadge status={doc.status || (doc.active ? 'aprovado' : 'inactive')} />
+                <StatusBadge status={(doc.resubmission_count || 0) > 0 && (doc.status === 'pendente' || doc.status === 'pending') ? 'reenviado' : (doc.status || (doc.active ? 'aprovado' : 'inactive'))} />
               </div>
 
               <div className="document-body">
@@ -1994,6 +2008,20 @@ function PdfManagementPage({ currentUser }) {
                 <span>Atualizado em {formatDate(doc.updated_at || doc.mtime)}</span>
               </div>
 
+              <div className="document-origin">
+                <span>
+                  Origem: {doc.source === 'chat' ? 'upload de usuário no chat' : doc.source === 'gerenciamento' ? 'gerenciamento de PDFs' : 'base inicial'}
+                </span>
+                <span>
+                  Enviado por {doc.uploader_name || doc.uploader_email || 'Sistema'}
+                </span>
+                {doc.approved_by && (
+                  <span>
+                    Aprovado por {doc.approved_by_name || doc.approved_by_email || 'administrador'} em {formatDateTime(doc.approved_at)}
+                  </span>
+                )}
+              </div>
+
               <div className="document-actions">
                 <a className="icon-btn small link-btn" href={buildDocumentUrl(doc.filename, currentUser.id)} target="_blank" rel="noreferrer" aria-label="Abrir PDF">
                   <Eye size={16} />
@@ -2003,6 +2031,9 @@ function PdfManagementPage({ currentUser }) {
                 </button>
                 <button className="icon-btn small" onClick={() => toggleDocument(doc)} aria-label={doc.active ? 'Desativar PDF' : 'Ativar PDF'}>
                   <Check size={16} />
+                </button>
+                <button className="icon-btn small" onClick={() => setHistoryDocument(doc)} aria-label="Ver histórico do PDF">
+                  <Clock size={16} />
                 </button>
                 {canReindex && (
                   <button className="icon-btn small" onClick={() => reindexDocument(doc)} aria-label="Reindexar PDF">
@@ -2023,6 +2054,14 @@ function PdfManagementPage({ currentUser }) {
           initialDocument={selectedDocument}
           onClose={closeModal}
           onSave={modalMode === 'upload' ? uploadDocument : updateDocument}
+        />
+      )}
+
+      {historyDocument && (
+        <HistoryModal
+          item={historyDocument}
+          title="Histórico do PDF"
+          onClose={() => setHistoryDocument(null)}
         />
       )}
     </div>
@@ -2097,6 +2136,8 @@ function MySubmissionsPage({ currentUser }) {
   const [submissions, setSubmissions] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+  const [dateFilter, setDateFilter] = useState('')
 
   const loadSubmissions = useCallback(async () => {
     setLoading(true)
@@ -2131,6 +2172,11 @@ function MySubmissionsPage({ currentUser }) {
     }
   }
 
+  const filteredSubmissions = useMemo(
+    () => filterSubmissions(submissions, search, dateFilter),
+    [submissions, search, dateFilter],
+  )
+
   return (
     <div className="admin-panel pdf-panel standalone-panel">
       <div className="admin-heading">
@@ -2142,8 +2188,19 @@ function MySubmissionsPage({ currentUser }) {
 
       {error && <div className="form-alert admin-alert"><AlertCircle size={17} />{error}</div>}
 
+      <SubmissionFilters
+        search={search}
+        dateFilter={dateFilter}
+        onSearchChange={setSearch}
+        onDateChange={setDateFilter}
+        onClear={() => {
+          setSearch('')
+          setDateFilter('')
+        }}
+      />
+
       <SubmissionList
-        submissions={submissions}
+        submissions={filteredSubmissions}
         currentUser={currentUser}
         emptyText={loading ? 'Carregando solicitações...' : 'Nenhuma solicitação enviada.'}
               onResubmit={resubmitSubmission}
@@ -2174,7 +2231,18 @@ function NotificationsPage({ currentUser, onNavigate }) {
     loadNotifications()
   }, [loadNotifications])
 
-  const items = payload.items || []
+  const items = [...(payload.items || [])].sort((a, b) =>
+    String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')),
+  )
+
+  const clearNotifications = async () => {
+    try {
+      await apiRequest('/notifications/read', { method: 'POST', userId: currentUser.id })
+      setPayload({ pending_documents: 0, items: [] })
+    } catch (err) {
+      setError(err.message)
+    }
+  }
 
   return (
     <div className="admin-panel standalone-panel notifications-page">
@@ -2191,6 +2259,10 @@ function NotificationsPage({ currentUser, onNavigate }) {
           <button className="ghost-btn" onClick={loadNotifications} disabled={loading}>
             <Database size={17} />
             Atualizar
+          </button>
+          <button className="ghost-btn" onClick={clearNotifications} disabled={loading || items.length === 0}>
+            <X size={17} />
+            Limpar
           </button>
         </div>
       </div>
@@ -2220,6 +2292,8 @@ function ApprovalRequestsPage({ currentUser }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [rejectingSubmission, setRejectingSubmission] = useState(null)
+  const [search, setSearch] = useState('')
+  const [dateFilter, setDateFilter] = useState('')
 
   const loadSubmissions = useCallback(async () => {
     setLoading(true)
@@ -2271,12 +2345,17 @@ function ApprovalRequestsPage({ currentUser }) {
     }
   }
 
+  const filteredSubmissions = useMemo(
+    () => filterSubmissions(submissions, search, dateFilter),
+    [submissions, search, dateFilter],
+  )
+
   return (
     <div className="admin-panel pdf-panel">
       <div className="admin-heading">
         <div>
-          <h1>Solicitações pendentes</h1>
-          <p>Aprove ou reprove documentos processados antes de publicar na base.</p>
+          <h1>Solicitações de documentos</h1>
+          <p>Acompanhe o fluxo completo e aprove ou reprove itens pendentes.</p>
         </div>
         <div className="heading-actions">
           <button className="ghost-btn" onClick={loadSubmissions} disabled={loading}>
@@ -2289,10 +2368,21 @@ function ApprovalRequestsPage({ currentUser }) {
       {error && <div className="form-alert admin-alert"><AlertCircle size={17} />{error}</div>}
       {notice && <div className="success-alert admin-alert"><Check size={17} />{notice}</div>}
 
+      <SubmissionFilters
+        search={search}
+        dateFilter={dateFilter}
+        onSearchChange={setSearch}
+        onDateChange={setDateFilter}
+        onClear={() => {
+          setSearch('')
+          setDateFilter('')
+        }}
+      />
+
       <SubmissionList
-        submissions={submissions}
+        submissions={filteredSubmissions}
         currentUser={currentUser}
-        emptyText={loading ? 'Carregando solicitações...' : 'Nenhum documento pendente.'}
+        emptyText={loading ? 'Carregando solicitações...' : 'Nenhuma solicitação encontrada.'}
         onApprove={approveSubmission}
         onReject={rejectSubmission}
       />
@@ -2340,13 +2430,46 @@ function DocumentCards({ docs, currentUser, emptyText, actions }) {
   )
 }
 
+function SubmissionFilters({ search, dateFilter, onSearchChange, onDateChange, onClear }) {
+  return (
+    <div className="admin-toolbar submission-filters">
+      <label className="search-field">
+        <Search size={18} />
+        <input
+          type="search"
+          placeholder="Buscar por documento, usuário ou status..."
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+        />
+      </label>
+      <label className="date-filter-field">
+        <Clock size={17} />
+        <input
+          type="date"
+          value={dateFilter}
+          onChange={(event) => onDateChange(event.target.value)}
+        />
+      </label>
+      {(search || dateFilter) && (
+        <button className="ghost-btn" onClick={onClear}>
+          <X size={16} />
+          Limpar filtros
+        </button>
+      )}
+    </div>
+  )
+}
+
 function SubmissionList({ currentUser, emptyText, onApprove, onReject, onResubmit, submissions }) {
+  const [historySubmission, setHistorySubmission] = useState(null)
+
   if (!submissions.length) return <div className="empty-panel">{emptyText}</div>
 
   return (
-    <div className="submission-list">
-      {submissions.map((submission) => (
-        <article className="submission-card" key={submission.id}>
+    <>
+      <div className="submission-list">
+        {submissions.map((submission) => (
+          <article className="submission-card" key={submission.id}>
           <div className="submission-main">
             <div className="document-icon"><FileText size={21} /></div>
             <div>
@@ -2356,7 +2479,7 @@ function SubmissionList({ currentUser, emptyText, onApprove, onReject, onResubmi
               </p>
               {submission.feedback && <small>{submission.feedback}</small>}
             </div>
-            <StatusBadge status={submission.status} />
+            <StatusBadge status={(submission.resubmission_count || 0) > 0 && (submission.status === 'pendente' || submission.status === 'pending') ? 'reenviado' : (submission.status || (submission.active ? 'aprovado' : 'inactive'))} />
           </div>
           <div className="submission-actions">
             <a className="ghost-btn" href={buildSubmissionUrl(submission.id, 'raw', currentUser.id)} target="_blank" rel="noreferrer">
@@ -2367,13 +2490,17 @@ function SubmissionList({ currentUser, emptyText, onApprove, onReject, onResubmi
               <FileText size={16} />
               Processado
             </a>
-            {onApprove && (
+            <button className="ghost-btn" onClick={() => setHistorySubmission(submission)}>
+              <Clock size={16} />
+              Histórico
+            </button>
+            {onApprove && submission.status === 'pendente' && (
               <button className="primary-btn" onClick={() => onApprove(submission)}>
                 <Check size={16} />
                 Aprovar
               </button>
             )}
-            {onReject && (
+            {onReject && submission.status === 'pendente' && (
               <button className="ghost-btn danger-text" onClick={() => onReject(submission)}>
                 <X size={16} />
                 Reprovar
@@ -2395,7 +2522,64 @@ function SubmissionList({ currentUser, emptyText, onApprove, onReject, onResubmi
               </label>
             )}
           </div>
-        </article>
+          </article>
+        ))}
+      </div>
+      {historySubmission && (
+        <HistoryModal
+          item={historySubmission}
+          title="Histórico da solicitação"
+          onClose={() => setHistorySubmission(null)}
+        />
+      )}
+    </>
+  )
+}
+
+function HistoryModal({ item, onClose, title }) {
+  return (
+    <div className="overlay" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="modal reject-modal history-modal" onClick={(event) => event.stopPropagation()}>
+        <button className="modal-back" onClick={onClose}>
+          <ChevronDown size={16} />
+          Voltar
+        </button>
+        <div>
+          <h2>{title}</h2>
+          <p>{item.title || item.original_name || item.filename}</p>
+        </div>
+        <DocumentTimeline events={item.history || []} fallbackDocument={item} />
+      </div>
+    </div>
+  )
+}
+
+function DocumentTimeline({ events, fallbackDocument }) {
+  const timeline = events.length
+    ? events
+    : [{
+        id: `fallback-${fallbackDocument.id}`,
+        event_type: fallbackDocument.status || 'pendente',
+        status: fallbackDocument.status,
+        created_at: fallbackDocument.updated_at || fallbackDocument.created_at,
+        user_name: fallbackDocument.uploader_name,
+        user_email: fallbackDocument.uploader_email,
+      }]
+
+  return (
+    <div className="document-timeline" aria-label="Linha do tempo da solicitação">
+      {timeline.map((event, index) => (
+        <div className="document-timeline-item" key={event.id || `${event.event_type}-${index}`}>
+          <span className={`timeline-dot ${event.status || event.event_type}`} />
+          <div>
+            <strong>{index + 1}. {eventLabel(event)}</strong>
+            <small>
+              {formatDateTime(event.created_at)}
+              {(event.user_name || event.user_email) && ` · ${event.user_name || event.user_email}`}
+            </small>
+            {event.message && <p>{event.message}</p>}
+          </div>
+        </div>
       ))}
     </div>
   )
@@ -3118,6 +3302,7 @@ function RejectReasonModal({ onClose, onConfirm, submission }) {
 }
 
 function PdfPreview({ label, url }) {
+  const previewUrl = `${url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`
   return (
     <div className="pdf-preview">
       <div className="pdf-preview-head">
@@ -3125,10 +3310,16 @@ function PdfPreview({ label, url }) {
         <strong>{label}</strong>
         <a href={url} target="_blank" rel="noreferrer">
           <Eye size={15} />
-          Abrir
+          Abrir em nova aba
         </a>
       </div>
-      <iframe src={url} title={label} />
+      <object data={previewUrl} type="application/pdf" title={label}>
+        <div className="pdf-preview-fallback">
+          <FileText size={28} />
+          <strong>Prévia pronta</strong>
+          <span>Abra em nova aba para visualizar ou baixar o PDF formatado.</span>
+        </div>
+      </object>
     </div>
   )
 }
@@ -3313,6 +3504,44 @@ function notificationMessage(item, currentUser) {
   if (item.status === 'reprovado') return `Sua solicitação foi reprovada: ${title}`
   if (item.status === 'pendente') return `Sua solicitação está pendente: ${title}`
   return title
+}
+
+function eventLabel(event) {
+  const labels = {
+    enviado: 'Solicitação enviada',
+    processado: 'PDF formatado/processado',
+    pendente: 'Pendente de aprovação',
+    reprovado: 'Reprovado pelo administrador',
+    reenviado: 'Solicitação reenviada',
+    aprovado: 'Aprovado e publicado',
+    inserido: 'PDF inserido',
+    editado: 'PDF editado',
+    ativado: 'PDF ativado',
+    inativado: 'PDF inativado',
+    excluido: 'PDF excluído',
+  }
+  return labels[event.event_type] || labels[event.status] || event.event_type || 'Atualização'
+}
+
+function filterSubmissions(submissions, search, dateFilter) {
+  const query = search.trim().toLowerCase()
+  return [...submissions]
+    .sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')))
+    .filter((submission) => {
+      const dateSource = String(submission.updated_at || submission.created_at || '')
+      const matchesDate = !dateFilter || dateSource.startsWith(dateFilter)
+      if (!matchesDate) return false
+      if (!query) return true
+      return [
+        submission.title,
+        submission.original_name,
+        submission.filename,
+        submission.status,
+        submission.uploader_name,
+        submission.uploader_email,
+        submission.feedback,
+      ].some((value) => String(value || '').toLowerCase().includes(query))
+    })
 }
 
 function formatShortDate(value) {
