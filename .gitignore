@@ -48,6 +48,9 @@ frontend/yarn-error.log*
 # Arquivos de ambiente local do frontend
 frontend/.env.local
 
+#Arquivos vite
+frontend/.vite
+
 # ambiente virtual python
 .venv/
 venv/
