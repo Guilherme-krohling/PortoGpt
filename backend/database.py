@@ -59,6 +59,19 @@ def _row_to_document(row) -> Dict[str, Any]:
         "uploaded_by": row[8],
         "created_at": row[9],
         "updated_at": row[10],
+        "status": row[11] if len(row) > 11 else "aprovado",
+        "raw_filename": row[12] if len(row) > 12 else row[1],
+        "processed_filename": row[13] if len(row) > 13 else row[1],
+        "feedback": row[14] if len(row) > 14 else "",
+        "approved_by": row[15] if len(row) > 15 else None,
+        "approved_at": row[16] if len(row) > 16 else None,
+        "uploader_name": row[17] if len(row) > 17 else "",
+        "uploader_email": row[18] if len(row) > 18 else "",
+        "resubmission_count": row[19] if len(row) > 19 else 0,
+        "approved_by_name": row[20] if len(row) > 20 else "",
+        "approved_by_email": row[21] if len(row) > 21 else "",
+        "uploader_role": row[22] if len(row) > 22 else "",
+        "source": "chat" if (len(row) > 22 and row[22] == "viewer") else ("gerenciamento" if row[8] else "sistema"),
     }
 
 
@@ -236,6 +249,26 @@ def init_db():
         )
     """)
 
+    cursor.execute("PRAGMA table_info(documents)")
+    doc_cols = {row[1] for row in cursor.fetchall()}
+    document_migrations = [
+        ("status", "TEXT DEFAULT 'aprovado'"),
+        ("raw_filename", "TEXT"),
+        ("processed_filename", "TEXT"),
+        ("feedback", "TEXT DEFAULT ''"),
+        ("approved_by", "INTEGER"),
+        ("approved_at", "TIMESTAMP"),
+        ("resubmission_count", "INTEGER DEFAULT 0"),
+    ]
+    for col_name, col_def in document_migrations:
+        if col_name not in doc_cols:
+            cursor.execute(f"ALTER TABLE documents ADD COLUMN {col_name} {col_def}")
+
+    cursor.execute("UPDATE documents SET status = 'aprovado' WHERE status IS NULL OR status = ''")
+    cursor.execute("UPDATE documents SET raw_filename = filename WHERE raw_filename IS NULL OR raw_filename = ''")
+    cursor.execute("UPDATE documents SET processed_filename = filename WHERE processed_filename IS NULL OR processed_filename = ''")
+    cursor.execute("UPDATE documents SET approved_at = COALESCE(approved_at, created_at) WHERE status = 'aprovado'")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,6 +291,32 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS document_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            status TEXT,
+            message TEXT DEFAULT '',
+            user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notification_reads (
+            user_id INTEGER NOT NULL,
+            document_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, document_id, status),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
         )
     """)
 
@@ -607,17 +666,24 @@ def sync_documents_from_disk(data_dir, metadata: Optional[Dict[str, Any]] = None
                 cursor.execute(
                     """
                     INSERT INTO documents
-                        (filename, original_name, title, description, size, mtime, active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (filename, original_name, title, description, size, mtime, active,
+                         status, raw_filename, processed_filename, approved_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'aprovado', ?, ?, ?)
                     """,
-                    (path.name, path.name, title, description, stat.st_size, int(stat.st_mtime), active),
+                    (
+                        path.name, path.name, title, description, stat.st_size, int(stat.st_mtime),
+                        active, path.name, path.name, brasilia_now(),
+                    ),
                 )
 
     if disk_names:
         placeholders = ",".join("?" for _ in disk_names)
-        cursor.execute(f"DELETE FROM documents WHERE filename NOT IN ({placeholders})", disk_names)
+        cursor.execute(
+            f"DELETE FROM documents WHERE COALESCE(status, 'aprovado') = 'aprovado' AND filename NOT IN ({placeholders})",
+            disk_names,
+        )
     else:
-        cursor.execute("DELETE FROM documents")
+        cursor.execute("DELETE FROM documents WHERE COALESCE(status, 'aprovado') = 'aprovado'")
 
     conn.commit()
     conn.close()
@@ -670,19 +736,40 @@ def sync_templates_from_disk(templates_dir) -> None:
     conn.close()
 
 
-def listar_documentos() -> List[Dict[str, Any]]:
+def listar_documentos(status: Optional[str] = None, uploaded_by: Optional[int] = None) -> List[Dict[str, Any]]:
     """Lista documentos conhecidos pelo sistema."""
     try:
         conn = sqlite3.connect(str(DB_PATH))
         cursor = conn.cursor()
+        filters = []
+        params = []
+        if status:
+            filters.append("COALESCE(d.status, 'aprovado') = ?")
+            params.append(status)
+        if uploaded_by is not None:
+            filters.append("d.uploaded_by = ?")
+            params.append(uploaded_by)
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
         cursor.execute(
-            """
-            SELECT id, filename, original_name, COALESCE(title, filename), COALESCE(description, ''),
-                   COALESCE(size, 0), COALESCE(mtime, 0), COALESCE(active, 1),
-                   uploaded_by, created_at, updated_at
-            FROM documents
-            ORDER BY active DESC, title COLLATE NOCASE ASC
-            """
+            f"""
+            SELECT d.id, d.filename, d.original_name, COALESCE(d.title, d.filename), COALESCE(d.description, ''),
+                   COALESCE(d.size, 0), COALESCE(d.mtime, 0), COALESCE(d.active, 1),
+                   d.uploaded_by, d.created_at, d.updated_at, COALESCE(d.status, 'aprovado'),
+                   COALESCE(d.raw_filename, d.filename), COALESCE(d.processed_filename, d.filename),
+                   COALESCE(d.feedback, ''), d.approved_by, d.approved_at,
+                   COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(d.resubmission_count, 0),
+                   COALESCE(approver.name, ''), COALESCE(approver.email, ''), COALESCE(u.role, '')
+            FROM documents d
+            LEFT JOIN users u ON u.id = d.uploaded_by
+            LEFT JOIN users approver ON approver.id = d.approved_by
+            {where_clause}
+            ORDER BY CASE COALESCE(d.status, 'aprovado')
+                WHEN 'pendente' THEN 0
+                WHEN 'aprovado' THEN 1
+                ELSE 2
+            END, d.active DESC, d.title COLLATE NOCASE ASC
+            """,
+            params,
         )
         rows = cursor.fetchall()
         conn.close()
@@ -744,11 +831,17 @@ def obter_documento(filename: str) -> Optional[Dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, filename, original_name, COALESCE(title, filename), COALESCE(description, ''),
-                   COALESCE(size, 0), COALESCE(mtime, 0), COALESCE(active, 1),
-                   uploaded_by, created_at, updated_at
-            FROM documents
-            WHERE filename = ?
+            SELECT d.id, d.filename, d.original_name, COALESCE(d.title, d.filename), COALESCE(d.description, ''),
+                   COALESCE(d.size, 0), COALESCE(d.mtime, 0), COALESCE(d.active, 1),
+                   d.uploaded_by, d.created_at, d.updated_at, COALESCE(d.status, 'aprovado'),
+                   COALESCE(d.raw_filename, d.filename), COALESCE(d.processed_filename, d.filename),
+                   COALESCE(d.feedback, ''), d.approved_by, d.approved_at,
+                   COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(d.resubmission_count, 0),
+                   COALESCE(approver.name, ''), COALESCE(approver.email, ''), COALESCE(u.role, '')
+            FROM documents d
+            LEFT JOIN users u ON u.id = d.uploaded_by
+            LEFT JOIN users approver ON approver.id = d.approved_by
+            WHERE d.filename = ?
             """,
             (filename,),
         )
@@ -757,6 +850,19 @@ def obter_documento(filename: str) -> Optional[Dict[str, Any]]:
         return _row_to_document(row) if row else None
     except Exception as e:
         print(f"Erro ao obter documento: {str(e)}")
+        return None
+
+
+def obter_documento_por_id(document_id: int) -> Optional[Dict[str, Any]]:
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute("SELECT filename FROM documents WHERE id = ?", (document_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return obter_documento(row[0]) if row else None
+    except Exception as e:
+        print(f"Erro ao obter documento por id: {str(e)}")
         return None
 
 
@@ -769,11 +875,22 @@ def registrar_documento(
     mtime: int,
     active: bool = True,
     uploaded_by: Optional[int] = None,
+    status: str = "aprovado",
+    raw_filename: Optional[str] = None,
+    processed_filename: Optional[str] = None,
+    feedback: str = "",
+    approved_by: Optional[int] = None,
+    approved_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Cria ou atualiza metadados de um documento enviado."""
     title = (title or Path(filename).stem).strip()
     description = (description or "").strip()
     original_name = original_name or filename
+
+    status = status if status in {"pendente", "aprovado", "reprovado"} else "pendente"
+    raw_filename = raw_filename or filename
+    processed_filename = processed_filename or filename
+    approved_at = approved_at or (brasilia_now() if status == "aprovado" else None)
 
     try:
         conn = sqlite3.connect(str(DB_PATH))
@@ -781,8 +898,9 @@ def registrar_documento(
         cursor.execute(
             """
             INSERT INTO documents
-                (filename, original_name, title, description, size, mtime, active, uploaded_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (filename, original_name, title, description, size, mtime, active, uploaded_by,
+                 status, raw_filename, processed_filename, feedback, approved_by, approved_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(filename) DO UPDATE SET
                 original_name = excluded.original_name,
                 title = excluded.title,
@@ -791,9 +909,18 @@ def registrar_documento(
                 mtime = excluded.mtime,
                 active = excluded.active,
                 uploaded_by = COALESCE(excluded.uploaded_by, documents.uploaded_by),
+                status = excluded.status,
+                raw_filename = excluded.raw_filename,
+                processed_filename = excluded.processed_filename,
+                feedback = excluded.feedback,
+                approved_by = excluded.approved_by,
+                approved_at = excluded.approved_at,
                 updated_at = ?
             """,
-            (filename, original_name, title, description, size, mtime, 1 if active else 0, uploaded_by, brasilia_now()),
+            (
+                filename, original_name, title, description, size, mtime, 1 if active else 0, uploaded_by,
+                status, raw_filename, processed_filename, feedback, approved_by, approved_at, brasilia_now(),
+            ),
         )
         conn.commit()
         conn.close()
@@ -872,6 +999,327 @@ def atualizar_documento(
         return {"success": True, "document": obter_documento(filename)}
     except Exception as e:
         return {"success": False, "message": f"Erro ao atualizar documento: {str(e)}"}
+
+
+def atualizar_status_documento(
+    filename: str,
+    status: str,
+    feedback: str = "",
+    approved_by: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Atualiza o status de aprovaÃ§Ã£o de um documento."""
+    if status not in {"pendente", "aprovado", "reprovado"}:
+        return {"success": False, "message": "Status invÃ¡lido"}
+
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE documents
+            SET status = ?,
+                active = CASE WHEN ? = 'aprovado' THEN 1 ELSE 0 END,
+                feedback = ?,
+                approved_by = CASE WHEN ? = 'aprovado' THEN ? ELSE NULL END,
+                approved_at = CASE WHEN ? = 'aprovado' THEN ? ELSE NULL END,
+                updated_at = ?
+            WHERE filename = ?
+            """,
+            (
+                status,
+                status,
+                feedback.strip(),
+                status,
+                approved_by,
+                status,
+                brasilia_now(),
+                brasilia_now(),
+                filename,
+            ),
+        )
+        conn.commit()
+        updated = cursor.rowcount
+        conn.close()
+
+        if updated == 0:
+            return {"success": False, "message": "Documento nÃ£o encontrado"}
+
+        return {"success": True, "document": obter_documento(filename)}
+    except Exception as e:
+        return {"success": False, "message": f"Erro ao atualizar status: {str(e)}"}
+
+
+def reenviar_documento_reprovado(
+    document_id: int,
+    filename: str,
+    original_name: str,
+    title: str,
+    size: int,
+    mtime: int,
+) -> Dict[str, Any]:
+    """Reabre uma solicitaÃ§Ã£o reprovada uma Ãºnica vez."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT COALESCE(status, 'aprovado'), COALESCE(resubmission_count, 0)
+            FROM documents
+            WHERE id = ?
+            """,
+            (document_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return {"success": False, "message": "Documento nÃ£o encontrado"}
+
+        status, resubmission_count = row
+        if status != "reprovado":
+            conn.close()
+            return {"success": False, "message": "Somente solicitaÃ§Ãµes reprovadas podem ser reenviadas"}
+        if int(resubmission_count or 0) >= 1:
+            conn.close()
+            return {"success": False, "message": "Limite de reenvio atingido para esta solicitaÃ§Ã£o"}
+
+        cursor.execute(
+            """
+            UPDATE documents
+            SET original_name = ?,
+                title = ?,
+                size = ?,
+                mtime = ?,
+                status = 'pendente',
+                active = 0,
+                raw_filename = ?,
+                processed_filename = ?,
+                feedback = '',
+                approved_by = NULL,
+                approved_at = NULL,
+                resubmission_count = COALESCE(resubmission_count, 0) + 1,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (original_name, title.strip(), size, mtime, filename, filename, brasilia_now(), document_id),
+        )
+        conn.commit()
+        conn.close()
+        return {"success": True, "document": obter_documento(filename)}
+    except Exception as e:
+        return {"success": False, "message": f"Erro ao reenviar documento: {str(e)}"}
+
+
+def registrar_evento_documento(
+    document_id: int,
+    event_type: str,
+    status: Optional[str] = None,
+    message: str = "",
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Registra a linha do tempo de uma solicitacao/documento."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO document_events (document_id, event_type, status, message, user_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (document_id, event_type, status, message.strip(), user_id, brasilia_now()),
+        )
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": f"Erro ao registrar evento: {str(e)}"}
+
+
+def listar_eventos_documento(document_id: int) -> List[Dict[str, Any]]:
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT e.id, e.document_id, e.event_type, COALESCE(e.status, ''),
+                   COALESCE(e.message, ''), e.user_id, e.created_at,
+                   COALESCE(u.name, ''), COALESCE(u.email, '')
+            FROM document_events e
+            LEFT JOIN users u ON u.id = e.user_id
+            WHERE e.document_id = ?
+            ORDER BY e.created_at ASC, e.id ASC
+            """,
+            (document_id,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "id": row[0],
+                "document_id": row[1],
+                "event_type": row[2],
+                "status": row[3],
+                "message": row[4],
+                "user_id": row[5],
+                "created_at": row[6],
+                "user_name": row[7],
+                "user_email": row[8],
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        print(f"Erro ao listar eventos do documento: {str(e)}")
+        return []
+
+
+def marcar_notificacoes_lidas(user_id: int, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        now = brasilia_now()
+        for item in items:
+            document_id = item.get("id")
+            status = item.get("status") or "pendente"
+            if not document_id:
+                continue
+            cursor.execute(
+                """
+                INSERT INTO notification_reads (user_id, document_id, status, read_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, document_id, status) DO UPDATE SET read_at = excluded.read_at
+                """,
+                (user_id, document_id, status, now),
+            )
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": f"Erro ao limpar notificacoes: {str(e)}"}
+
+
+def filtrar_notificacoes_nao_lidas(user_id: int, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not items:
+        return []
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        result = []
+        for item in items:
+            cursor.execute(
+                """
+                SELECT 1 FROM notification_reads
+                WHERE user_id = ? AND document_id = ? AND status = ?
+                """,
+                (user_id, item.get("id"), item.get("status") or "pendente"),
+            )
+            if not cursor.fetchone():
+                result.append(item)
+        conn.close()
+        return result
+    except Exception as e:
+        print(f"Erro ao filtrar notificacoes: {str(e)}")
+        return items
+
+
+def contar_documentos_pendentes() -> int:
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM documents WHERE COALESCE(status, 'aprovado') = 'pendente'")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return int(count or 0)
+    except Exception as e:
+        print(f"Erro ao contar pendÃªncias: {str(e)}")
+        return 0
+
+
+def obter_admin_dashboard_stats() -> Dict[str, Any]:
+    """Retorna indicadores agregados para o dashboard administrativo."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM users WHERE COALESCE(status, 'active') = 'active'")
+        active_users = cursor.fetchone()[0]
+        cursor.execute("SELECT COALESCE(role, 'viewer'), COUNT(*) FROM users GROUP BY COALESCE(role, 'viewer')")
+        users_by_role = {row[0]: row[1] for row in cursor.fetchall()}
+
+        cursor.execute("SELECT COUNT(*) FROM documents")
+        total_documents = cursor.fetchone()[0]
+        cursor.execute("SELECT COALESCE(status, 'aprovado'), COUNT(*) FROM documents GROUP BY COALESCE(status, 'aprovado')")
+        documents_by_status = {row[0]: row[1] for row in cursor.fetchall()}
+
+        cursor.execute("SELECT COUNT(*) FROM templates")
+        total_templates = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM chat_sessions")
+        total_sessions = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM chat_history")
+        total_messages = cursor.fetchone()[0]
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM chat_history
+            WHERE created_at >= datetime('now', '-7 days')
+            """
+        )
+        messages_7d = cursor.fetchone()[0]
+
+        cursor.execute(
+            """
+            SELECT d.id, d.title, d.original_name, d.filename, COALESCE(d.status, 'aprovado'),
+                   d.created_at, d.updated_at, COALESCE(u.name, ''), COALESCE(u.email, '')
+            FROM documents d
+            LEFT JOIN users u ON u.id = d.uploaded_by
+            ORDER BY datetime(d.updated_at) DESC, d.id DESC
+            LIMIT 6
+            """
+        )
+        recent_documents = [
+            {
+                "id": row[0],
+                "title": row[1] or row[2] or row[3],
+                "filename": row[3],
+                "status": row[4],
+                "created_at": row[5],
+                "updated_at": row[6],
+                "uploader_name": row[7],
+                "uploader_email": row[8],
+            }
+            for row in cursor.fetchall()
+        ]
+
+        conn.close()
+        return {
+            "users": {
+                "total": total_users,
+                "active": active_users,
+                "by_role": users_by_role,
+            },
+            "documents": {
+                "total": total_documents,
+                "by_status": documents_by_status,
+                "pending": documents_by_status.get("pendente", 0),
+                "approved": documents_by_status.get("aprovado", 0),
+                "rejected": documents_by_status.get("reprovado", 0),
+                "recent": recent_documents,
+            },
+            "templates": {"total": total_templates},
+            "chat": {
+                "sessions": total_sessions,
+                "messages": total_messages,
+                "messages_7d": messages_7d,
+            },
+        }
+    except Exception as e:
+        print(f"Erro ao montar dashboard admin: {str(e)}")
+        return {
+            "users": {"total": 0, "active": 0, "by_role": {}},
+            "documents": {"total": 0, "by_status": {}, "pending": 0, "approved": 0, "rejected": 0, "recent": []},
+            "templates": {"total": 0},
+            "chat": {"sessions": 0, "messages": 0, "messages_7d": 0},
+        }
 
 
 def atualizar_template(

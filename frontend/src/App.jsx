@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
   AlertCircle,
+  Bell,
   Bot,
   Brain,
   Check,
@@ -52,13 +53,17 @@ const DEFAULT_ACCENT = ACCENT_COLORS[0]
 const roleLabels = {
   admin: 'Administrador',
   editor: 'Editor',
-  viewer: 'Visualizador',
+  viewer: 'Usuário',
 }
 
 const statusLabels = {
   active: 'Ativo',
   inactive: 'Inativo',
   pending: 'Pendente',
+  pendente: 'Pendente',
+  aprovado: 'Aprovado',
+    reprovado: 'Reprovado',
+    reenviado: 'Reenviado',
 }
 
 const roleIcons = {
@@ -101,6 +106,7 @@ const adminNavItems = [
   { path: '/admin/users', label: 'Usuários', icon: Users },
   { path: '/admin/knowledge', label: 'Conhecimento da IA', icon: Brain },
   { path: '/admin/pdfs', label: 'PDFs Base', icon: FileText },
+  { path: '/admin/approvals', label: 'Aprovações', icon: Clock },
   { path: '/admin/templates', label: 'Templates', icon: LayoutTemplate },
 ]
 
@@ -219,9 +225,10 @@ function App() {
     return <LoginPage onLogin={handleLogin} theme={theme} onToggleTheme={toggleTheme} />
   }
 
-  const effectiveRoute = route === '/login' ? '/' : route === '/admin' ? '/admin/users' : route
+  const effectiveRoute = route === '/login' ? '/' : route === '/admin' ? '/admin/dashboard' : route
   const isAdminRoute = effectiveRoute.startsWith('/admin')
   const isAdmin = currentUser.role === 'admin'
+  const canManagePdfs = currentUser.role === 'admin' || currentUser.role === 'editor'
 
   return (
     <div
@@ -235,6 +242,7 @@ function App() {
           theme={theme}
           collapsed={sidebarCollapsed}
           refreshKey={historyRefreshKey}
+          onNavigate={navigate}
           onNewChat={startNewChat}
           onSelectSession={openChatSession}
           onHistoryChange={() => setHistoryRefreshKey((value) => value + 1)}
@@ -259,11 +267,14 @@ function App() {
           route: effectiveRoute,
           currentUser,
           isAdmin,
+          canManagePdfs,
           onNavigate: navigate,
           chatSessionKey,
           activeSessionId,
           onChatSessionChange: handleChatSessionChange,
           onAccentChange: updateAccentColor,
+          onToggleTheme: toggleTheme,
+          theme,
           adminSidebarCollapsed,
           onToggleAdminSidebar: () => setAdminSidebarCollapsed((value) => !value),
         })}
@@ -272,24 +283,38 @@ function App() {
   )
 }
 
-function renderRoute({ route, currentUser, isAdmin, onNavigate, chatSessionKey, activeSessionId, onChatSessionChange, onAccentChange, adminSidebarCollapsed, onToggleAdminSidebar }) {
+function renderRoute({ route, currentUser, isAdmin, canManagePdfs, onNavigate, chatSessionKey, activeSessionId, onChatSessionChange, onAccentChange, onToggleTheme, theme, adminSidebarCollapsed, onToggleAdminSidebar }) {
   if (route.startsWith('/admin')) {
-    if (!isAdmin) {
+    if (!isAdmin && !(canManagePdfs && route === '/admin/pdfs')) {
       return <AccessDenied onNavigate={onNavigate} />
     }
 
     return (
-      <AdminLayout collapsed={adminSidebarCollapsed} route={route} onNavigate={onNavigate} onToggleCollapsed={onToggleAdminSidebar}>
-        {route === '/admin/knowledge' && <KnowledgePage currentUser={currentUser} onNavigate={onNavigate} />}
+      <AdminLayout collapsed={adminSidebarCollapsed} route={route} currentUser={currentUser} onNavigate={onNavigate} onToggleCollapsed={onToggleAdminSidebar}>
+        {(route === '/admin' || route === '/admin/dashboard') && isAdmin && <AdminDashboardPage currentUser={currentUser} onNavigate={onNavigate} />}
+        {route === '/admin/knowledge' && isAdmin && <KnowledgePage currentUser={currentUser} onNavigate={onNavigate} />}
         {route === '/admin/pdfs' && <PdfManagementPage currentUser={currentUser} />}
-        {route === '/admin/templates' && <TemplateManagementPage currentUser={currentUser} />}
-        {(route === '/admin' || route === '/admin/users') && <AdminUsersPage currentUser={currentUser} />}
+        {route === '/admin/approvals' && isAdmin && <ApprovalRequestsPage currentUser={currentUser} />}
+        {route === '/admin/templates' && isAdmin && <TemplateManagementPage currentUser={currentUser} />}
+        {route === '/admin/users' && isAdmin && <AdminUsersPage currentUser={currentUser} />}
       </AdminLayout>
     )
   }
 
   if (route === '/perfil') {
-    return <ProfilePage currentUser={currentUser} onAccentChange={onAccentChange} />
+    return <ProfilePage currentUser={currentUser} onAccentChange={onAccentChange} onNavigate={onNavigate} />
+  }
+
+  if (route === '/notificacoes') {
+    return <NotificationsPage currentUser={currentUser} onNavigate={onNavigate} />
+  }
+
+  if (route === '/pdfs') {
+    return <AvailablePdfsPage currentUser={currentUser} />
+  }
+
+  if (route === '/solicitacoes') {
+    return <MySubmissionsPage currentUser={currentUser} />
   }
 
   if (route !== '/') {
@@ -398,10 +423,10 @@ function LoginPage({ onLogin, theme, onToggleTheme }) {
 
 function ChatSidebar({
   activeSessionId,
-  theme,
   collapsed,
   currentUser,
   onHistoryChange,
+  onNavigate,
   onNewChat,
   onSelectSession,
   onToggleCollapsed,
@@ -464,6 +489,24 @@ function ChatSidebar({
     setSearchOpen(true)
   }
 
+  const roleNavItems = useMemo(() => {
+    const homeItem = { path: '/', label: 'Home', icon: Home }
+    if (currentUser.role === 'editor') {
+      return [homeItem, { path: '/admin/pdfs', label: 'Gerenciar PDFs', icon: FileText }]
+    }
+    if (currentUser.role === 'admin') {
+      return [
+        homeItem,
+        { path: '/admin/dashboard', label: 'Administração', icon: Shield },
+      ]
+    }
+    return [
+      homeItem,
+      { path: '/pdfs', label: 'PDFs disponíveis', icon: FileText },
+      { path: '/solicitacoes', label: 'Minhas solicitações', icon: Clock },
+    ]
+  }, [currentUser.role])
+
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
@@ -487,6 +530,13 @@ function ChatSidebar({
           <Search size={18} />
           <span>Buscar em chats</span>
         </button>
+
+        {roleNavItems.map((item) => (
+          <button key={item.path} onClick={() => onNavigate(item.path)} className="sidebar-nav-btn">
+            <item.icon size={18} />
+            <span>{item.label}</span>
+          </button>
+        ))}
 
         <button className="sidebar-close-btn" onClick={onToggleCollapsed} aria-label="Fechar barra lateral" title="Fechar barra lateral">
           <PanelLeftClose size={18} />
@@ -562,21 +612,96 @@ function TopBar({
   onToggleTheme,
   theme,
 }) {
+  const [notifications, setNotifications] = useState({ pending_documents: 0, items: [] })
+  const [notificationOpen, setNotificationOpen] = useState(false)
+  const [notificationClosedByClick, setNotificationClosedByClick] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    if (!currentUser?.id) return undefined
+
+    const loadNotifications = () => {
+      apiRequest('/notifications', { userId: currentUser.id })
+        .then((payload) => {
+          if (active) setNotifications(payload)
+        })
+        .catch(() => {
+          if (active) setNotifications({ pending_documents: 0, items: [] })
+        })
+    }
+
+    loadNotifications()
+    const timer = window.setInterval(loadNotifications, 30000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [currentUser?.id])
+
+  const latestUserNotice = currentUser.role === 'viewer' ? notifications.items?.[0] : null
+  const notificationItems = notifications.items || []
+  const unreadCount = isAdmin ? Number(notifications.pending_documents || 0) : notificationItems.length
+  const showNotifications = currentUser.role !== 'editor'
+  const clearNotifications = async () => {
+    try {
+      await apiRequest('/notifications/read', { method: 'POST', userId: currentUser.id })
+    } catch {
+      // A limpeza visual continua mesmo se a persistencia falhar momentaneamente.
+    }
+    setNotifications({ pending_documents: 0, items: [] })
+    setNotificationOpen(false)
+    setNotificationClosedByClick(true)
+  }
+
   return (
     <div className="top-bar">
       <div className="top-left">
-        {!isAdminRoute && (
-          <button className="model-selector" onClick={() => onNavigate('/')}>
-            PortoGpt 1.0
-            <ChevronDown size={17} />
-          </button>
-        )}
       </div>
 
       <div className="top-actions">
-        <button className="theme-toggle" onClick={onToggleTheme} aria-label="Alternar tema">
-          {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
-        </button>
+        {showNotifications && (
+        <div
+          className={`notification-wrap ${notificationOpen ? 'open' : ''} ${notificationClosedByClick ? 'closed' : ''}`}
+          onMouseEnter={() => setNotificationClosedByClick(false)}
+          onMouseLeave={() => {
+            setNotificationOpen(false)
+            setNotificationClosedByClick(false)
+          }}
+        >
+          <button
+            className={`notification-bell ${latestUserNotice ? latestUserNotice.status : ''}`}
+            onClick={() => {
+              setNotificationOpen((value) => {
+                const next = !value
+                setNotificationClosedByClick(!next)
+                return next
+              })
+            }}
+            title={isAdmin ? 'Notificações de solicitações' : 'Notificações de documentos'}
+          >
+            <Bell size={18} />
+            {unreadCount > 0 && <span>{unreadCount}</span>}
+          </button>
+          <div className="notification-popover">
+            <div className="notification-popover-head">
+                <strong>Notificações</strong>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={clearNotifications}>Limpar</button>
+                  <button onClick={() => onNavigate('/notificacoes')}>Ver todas</button>
+                </div>
+            </div>
+            <div className="notification-popover-list">
+              {notificationItems.length === 0 && <p>Nenhuma notificação nova.</p>}
+              {notificationItems.slice(0, 4).map((item) => (
+                <button key={item.id} onClick={() => onNavigate(isAdmin ? '/admin/approvals' : '/solicitacoes')}>
+                  <span>{notificationMessage(item, currentUser)}</span>
+                  <small>{formatDateTime(item.updated_at || item.created_at)}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        )}
 
         <div
           className="avatar-menu-wrap"
@@ -596,12 +721,14 @@ function TopBar({
                 <User size={17} />
                 Meu perfil
               </button>
-              {isAdmin && (
-                <button onClick={() => onNavigate('/admin/users')}>
-                  <Shield size={17} />
-                  Administração
-                </button>
-              )}
+              <button onClick={() => onNavigate('/notificacoes')}>
+                <Bell size={17} />
+                Minhas notificações
+              </button>
+              <button onClick={onToggleTheme}>
+                {theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
+                {theme === 'light' ? 'Modo escuro' : 'Modo claro'}
+              </button>
               <button onClick={onLogout}>
                 <LogOut size={17} />
                 Sair
@@ -621,7 +748,6 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
   const [currentSessionId, setCurrentSessionId] = useState(sessionId || null)
   const [welcomeSuggestions, setWelcomeSuggestions] = useState([])
   const [file, setFile] = useState(null)
-  const [showUploadModal, setShowUploadModal] = useState(false)
   const chatContainerRef = useRef(null)
   const fileInput = useRef(null)
 
@@ -793,8 +919,19 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
   const finishUpload = async () => {
     if (!file) return
 
+    const text = input.trim()
+    const selectedFile = file
     const formData = new FormData()
-    formData.append('file', file)
+    formData.append('file', selectedFile)
+    formData.append('message', text)
+    if (currentSessionId) formData.append('session_id', String(currentSessionId))
+
+    setMessages((prev) => [...prev, {
+      role: 'user',
+      text: text || `Enviei o PDF ${selectedFile.name}.`,
+      fileName: selectedFile.name,
+    }])
+    setInput('')
     setLoading(true)
 
     try {
@@ -803,12 +940,22 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
         userId: currentUser.id,
         body: formData,
       })
-      setMessages((prev) => [...prev, { role: 'assistant', text: data.response }])
+      if (data.session_id && data.session_id !== currentSessionId) {
+        setCurrentSessionId(data.session_id)
+        onSessionChange?.(data.session_id)
+      } else if (data.session_id) {
+        onSessionChange?.(data.session_id)
+      }
+      setMessages((prev) => [...prev, {
+        role: 'assistant',
+        text: data.response,
+        previewUrl: data.document?.id ? buildSubmissionUrl(data.document.id, 'processed', currentUser.id) : null,
+        previewLabel: 'Prévia do PDF formatado',
+      }])
     } catch (err) {
       setMessages((prev) => [...prev, { role: 'assistant', text: err.message }])
     } finally {
       setLoading(false)
-      setShowUploadModal(false)
       setFile(null)
       if (fileInput.current) fileInput.current.value = ''
     }
@@ -877,6 +1024,15 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
                 <div className="message-content">
                   <div className="message-text">
                     {message.role === 'assistant' ? <ReactMarkdown>{message.text}</ReactMarkdown> : message.text}
+                    {message.fileName && (
+                      <div className="attached-file-chip">
+                        <FileText size={15} />
+                        {message.fileName}
+                      </div>
+                    )}
+                    {message.previewUrl && (
+                      <PdfPreview url={message.previewUrl} label={message.previewLabel || 'Prévia do PDF'} />
+                    )}
                   </div>
                 </div>
               </div>
@@ -893,15 +1049,31 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
       </div>
 
       <div className="input-container">
+        {file && (
+          <div className="composer-attachment">
+            <FileText size={16} />
+            <span>{file.name}</span>
+            <button onClick={closeUploadModal} aria-label="Remover anexo">
+              <X size={14} />
+            </button>
+          </div>
+        )}
         <div className="input-box">
+          <div className="composer-model-selector" aria-label="Modelo atual">
+            PortoGpt 1.0
+            <ChevronDown size={15} />
+          </div>
           <input
             type="text"
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') sendMessage()
+              if (event.key === 'Enter') {
+                if (file) finishUpload()
+                else sendMessage()
+              }
             }}
-            placeholder="Digite sua pergunta aqui..."
+            placeholder={file ? 'Escreva uma mensagem para enviar com o PDF...' : 'Digite sua pergunta aqui...'}
             disabled={loading || historyLoading}
           />
           <input
@@ -911,34 +1083,29 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
               const selectedFile = event.target.files?.[0]
               if (!selectedFile) return
               setFile(selectedFile)
-              setShowUploadModal(true)
             }}
             style={{ display: 'none' }}
           />
           <button className="icon-btn" title="Fazer upload de arquivo PDF" onClick={() => fileInput.current?.click()} disabled={loading || historyLoading}>
             <FileUp size={20} />
           </button>
-          <button className="send-btn" title="Enviar mensagem" onClick={() => sendMessage()} disabled={loading || historyLoading || !input.trim()}>
+          <button className="send-btn" title="Enviar mensagem" onClick={() => (file ? finishUpload() : sendMessage())} disabled={loading || historyLoading || (!input.trim() && !file)}>
             <Send size={18} />
           </button>
         </div>
         <p className="disclaimer">O PortoGpt pode cometer erros. Verifique as informações importantes.</p>
       </div>
 
-      {showUploadModal && (
-        <ConfirmModal
-          title="Confirmar upload"
-          description={`Deseja fazer o upload do arquivo ${file?.name}?`}
-          confirmLabel="Enviar"
-          onCancel={closeUploadModal}
-          onConfirm={finishUpload}
-        />
-      )}
     </>
   )
 }
 
-function AdminLayout({ children, collapsed, route, onNavigate, onToggleCollapsed }) {
+function AdminLayout({ children, collapsed, currentUser, route, onNavigate, onToggleCollapsed }) {
+  const visibleNavItems = adminNavItems.filter((item) => {
+    if (currentUser.role === 'admin') return true
+    return item.path === '/admin/pdfs'
+  })
+
   return (
     <section className="admin-view">
       <aside className="admin-menu">
@@ -958,7 +1125,7 @@ function AdminLayout({ children, collapsed, route, onNavigate, onToggleCollapsed
             <Home size={18} />
             <span>Chat inicial</span>
           </button>
-          {adminNavItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <button
               key={item.path}
               className={`admin-menu-item ${route === item.path ? 'active' : ''}`}
@@ -972,6 +1139,135 @@ function AdminLayout({ children, collapsed, route, onNavigate, onToggleCollapsed
       </aside>
       <div className="admin-content">{children}</div>
     </section>
+  )
+}
+
+function AdminDashboardPage({ currentUser, onNavigate }) {
+  const [stats, setStats] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const payload = await apiRequest('/admin/dashboard', { userId: currentUser.id })
+      setStats(payload.stats)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [currentUser.id])
+
+  useEffect(() => {
+    loadDashboard()
+  }, [loadDashboard])
+
+  const users = stats?.users || { total: 0, active: 0, by_role: {} }
+  const docs = stats?.documents || { total: 0, approved: 0, pending: 0, rejected: 0, recent: [] }
+  const chat = stats?.chat || { sessions: 0, messages: 0, messages_7d: 0 }
+  const templates = stats?.templates || { total: 0 }
+
+  return (
+    <div className="admin-panel dashboard-panel">
+      <div className="admin-heading">
+        <div>
+          <h1>Dashboard</h1>
+          <p>Visão geral da operação, conhecimento e uso do PortoGpt.</p>
+        </div>
+        <div className="heading-actions">
+          <button className="ghost-btn" onClick={() => onNavigate('/')}>
+            <Home size={17} />
+            Chat
+          </button>
+          <button className="ghost-btn" onClick={loadDashboard} disabled={loading}>
+            <Database size={17} />
+            Atualizar
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="form-alert admin-alert"><AlertCircle size={17} />{error}</div>}
+
+      <div className="dashboard-grid">
+        <article className="dashboard-card hero-metric">
+          <span>Documentos</span>
+          <strong>{docs.total}</strong>
+          <p>{docs.approved} aprovados · {docs.pending} pendentes · {docs.rejected} reprovados</p>
+        </article>
+        <article className="dashboard-card">
+          <FileText size={22} />
+          <span>Templates</span>
+          <strong>{templates.total}</strong>
+          <p>Modelos prontos para o fluxo de formatação.</p>
+        </article>
+        <article className="dashboard-card">
+          <Users size={22} />
+          <span>Usuários ativos</span>
+          <strong>{users.active}</strong>
+          <p>{users.by_role?.admin || 0} admins · {users.by_role?.editor || 0} editores · {users.by_role?.viewer || 0} usuários</p>
+        </article>
+        <article className="dashboard-card">
+          <MessageSquare size={22} />
+          <span>Conversas</span>
+          <strong>{chat.sessions}</strong>
+          <p>{chat.messages} mensagens registradas, {chat.messages_7d} nos últimos 7 dias.</p>
+        </article>
+      </div>
+
+      <div className="dashboard-split">
+        <section className="dashboard-section">
+          <div className="section-heading compact">
+            <div>
+              <h2>Saúde da base</h2>
+              <p>Publicação e validação dos documentos.</p>
+            </div>
+          </div>
+          <div className="health-bars">
+            <DashboardBar label="Aprovados" value={docs.approved} total={docs.total} tone="success" />
+            <DashboardBar label="Pendentes" value={docs.pending} total={docs.total} tone="warning" />
+            <DashboardBar label="Reprovados" value={docs.rejected} total={docs.total} tone="danger" />
+          </div>
+        </section>
+
+        <section className="dashboard-section">
+          <div className="section-heading compact">
+            <div>
+              <h2>Atividade recente</h2>
+              <p>Últimas movimentações na base documental.</p>
+            </div>
+          </div>
+          <div className="dashboard-activity">
+            {!docs.recent?.length && <div className="empty-panel">Nenhuma movimentação recente.</div>}
+            {docs.recent?.map((doc) => (
+              <article key={doc.id}>
+                <StatusBadge status={(doc.resubmission_count || 0) > 0 && (doc.status === 'pendente' || doc.status === 'pending') ? 'reenviado' : (doc.status || (doc.active ? 'aprovado' : 'inactive'))} />
+                <div>
+                  <strong>{doc.title}</strong>
+                  <span>{doc.uploader_name || doc.uploader_email || 'Sistema'} · {formatDateTime(doc.updated_at || doc.created_at)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  )
+}
+
+function DashboardBar({ label, total, value, tone }) {
+  const pct = total > 0 ? Math.round((Number(value || 0) / Number(total)) * 100) : 0
+  return (
+    <div className="dashboard-bar">
+      <div>
+        <strong>{label}</strong>
+        <span>{value || 0}</span>
+      </div>
+      <div className="bar-track">
+        <span className={tone} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
   )
 }
 
@@ -1472,6 +1768,8 @@ function PdfManagementPage({ currentUser }) {
   const [search, setSearch] = useState('')
   const [modalMode, setModalMode] = useState(null)
   const [selectedDocument, setSelectedDocument] = useState(null)
+  const [historyDocument, setHistoryDocument] = useState(null)
+  const canReindex = currentUser.role === 'admin'
 
   const loadDocs = useCallback(async () => {
     setLoading(true)
@@ -1613,10 +1911,12 @@ function PdfManagementPage({ currentUser }) {
           <p>Envie, edite, reindexe e remova os arquivos usados como conhecimento da IA.</p>
         </div>
         <div className="heading-actions">
-          <button className="ghost-btn" onClick={reindexAllDocuments}>
-            <Database size={17} />
-            Reindexar base
-          </button>
+          {canReindex && (
+            <button className="ghost-btn" onClick={reindexAllDocuments}>
+              <Database size={17} />
+              Reindexar base
+            </button>
+          )}
           <button className="primary-btn" onClick={openUploadModal}>
             <FileUp size={18} />
             Enviar PDF
@@ -1694,7 +1994,7 @@ function PdfManagementPage({ currentUser }) {
                 <div className="document-icon">
                   <FileText size={22} />
                 </div>
-                <StatusBadge status={doc.active ? 'active' : 'inactive'} />
+                <StatusBadge status={(doc.resubmission_count || 0) > 0 && (doc.status === 'pendente' || doc.status === 'pending') ? 'reenviado' : (doc.status || (doc.active ? 'aprovado' : 'inactive'))} />
               </div>
 
               <div className="document-body">
@@ -1708,16 +2008,38 @@ function PdfManagementPage({ currentUser }) {
                 <span>Atualizado em {formatDate(doc.updated_at || doc.mtime)}</span>
               </div>
 
+              <div className="document-origin">
+                <span>
+                  Origem: {doc.source === 'chat' ? 'upload de usuário no chat' : doc.source === 'gerenciamento' ? 'gerenciamento de PDFs' : 'base inicial'}
+                </span>
+                <span>
+                  Enviado por {doc.uploader_name || doc.uploader_email || 'Sistema'}
+                </span>
+                {doc.approved_by && (
+                  <span>
+                    Aprovado por {doc.approved_by_name || doc.approved_by_email || 'administrador'} em {formatDateTime(doc.approved_at)}
+                  </span>
+                )}
+              </div>
+
               <div className="document-actions">
+                <a className="icon-btn small link-btn" href={buildDocumentUrl(doc.filename, currentUser.id)} target="_blank" rel="noreferrer" aria-label="Abrir PDF">
+                  <Eye size={16} />
+                </a>
                 <button className="icon-btn small" onClick={() => openEditModal(doc)} aria-label="Editar PDF">
                   <Pencil size={16} />
                 </button>
                 <button className="icon-btn small" onClick={() => toggleDocument(doc)} aria-label={doc.active ? 'Desativar PDF' : 'Ativar PDF'}>
                   <Check size={16} />
                 </button>
-                <button className="icon-btn small" onClick={() => reindexDocument(doc)} aria-label="Reindexar PDF">
-                  <Database size={16} />
+                <button className="icon-btn small" onClick={() => setHistoryDocument(doc)} aria-label="Ver histórico do PDF">
+                  <Clock size={16} />
                 </button>
+                {canReindex && (
+                  <button className="icon-btn small" onClick={() => reindexDocument(doc)} aria-label="Reindexar PDF">
+                    <Database size={16} />
+                  </button>
+                )}
                 <button className="icon-btn small danger" onClick={() => deleteDocument(doc)} aria-label="Remover PDF">
                   <Trash2 size={16} />
                 </button>
@@ -1734,6 +2056,531 @@ function PdfManagementPage({ currentUser }) {
           onSave={modalMode === 'upload' ? uploadDocument : updateDocument}
         />
       )}
+
+      {historyDocument && (
+        <HistoryModal
+          item={historyDocument}
+          title="Histórico do PDF"
+          onClose={() => setHistoryDocument(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function AvailablePdfsPage({ currentUser }) {
+  const [docs, setDocs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+
+  const loadDocs = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const payload = await apiRequest('/docs', { userId: currentUser.id })
+      setDocs(payload.files || [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [currentUser.id])
+
+  useEffect(() => {
+    loadDocs()
+  }, [loadDocs])
+
+  const filteredDocs = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    if (!query) return docs
+    return docs.filter((doc) =>
+      [doc.title, doc.filename, doc.description, doc.status].some((value) =>
+        String(value || '').toLowerCase().includes(query),
+      ),
+    )
+  }, [docs, search])
+
+  return (
+    <div className="admin-panel pdf-panel standalone-panel">
+      <div className="admin-heading">
+        <div>
+          <h1>PDFs disponíveis</h1>
+          <p>Documentos aprovados para consulta na base do PortoGpt.</p>
+        </div>
+      </div>
+
+      <div className="admin-toolbar pdf-toolbar">
+        <label className="search-field">
+          <Search size={18} />
+          <input type="search" placeholder="Buscar PDFs..." value={search} onChange={(event) => setSearch(event.target.value)} />
+        </label>
+        <button className="ghost-btn" onClick={loadDocs} disabled={loading}>
+          <Database size={17} />
+          Atualizar
+        </button>
+      </div>
+
+      {error && <div className="form-alert admin-alert"><AlertCircle size={17} />{error}</div>}
+
+      <DocumentCards
+        docs={filteredDocs}
+        currentUser={currentUser}
+        emptyText={loading ? 'Carregando PDFs...' : 'Nenhum PDF aprovado encontrado.'}
+      />
+    </div>
+  )
+}
+
+function MySubmissionsPage({ currentUser }) {
+  const [submissions, setSubmissions] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+  const [dateFilter, setDateFilter] = useState('')
+
+  const loadSubmissions = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const payload = await apiRequest('/submissions', { userId: currentUser.id })
+      setSubmissions(payload.submissions || [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [currentUser.id])
+
+  useEffect(() => {
+    loadSubmissions()
+  }, [loadSubmissions])
+
+  const resubmitSubmission = async (submission, selectedFile) => {
+    if (!selectedFile) return
+    const body = new FormData()
+    body.append('file', selectedFile)
+    try {
+      await apiRequest(`/submissions/${submission.id}/resubmit`, {
+        method: 'POST',
+        userId: currentUser.id,
+        body,
+      })
+      await loadSubmissions()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const filteredSubmissions = useMemo(
+    () => filterSubmissions(submissions, search, dateFilter),
+    [submissions, search, dateFilter],
+  )
+
+  return (
+    <div className="admin-panel pdf-panel standalone-panel">
+      <div className="admin-heading">
+        <div>
+          <h1>Minhas solicitações</h1>
+          <p>Acompanhe documentos enviados, saída processada e feedback do administrador.</p>
+        </div>
+      </div>
+
+      {error && <div className="form-alert admin-alert"><AlertCircle size={17} />{error}</div>}
+
+      <SubmissionFilters
+        search={search}
+        dateFilter={dateFilter}
+        onSearchChange={setSearch}
+        onDateChange={setDateFilter}
+        onClear={() => {
+          setSearch('')
+          setDateFilter('')
+        }}
+      />
+
+      <SubmissionList
+        submissions={filteredSubmissions}
+        currentUser={currentUser}
+        emptyText={loading ? 'Carregando solicitações...' : 'Nenhuma solicitação enviada.'}
+              onResubmit={resubmitSubmission}
+      />
+    </div>
+  )
+}
+
+function NotificationsPage({ currentUser, onNavigate }) {
+  const [payload, setPayload] = useState({ pending_documents: 0, items: [] })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const loadNotifications = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await apiRequest('/notifications', { userId: currentUser.id })
+      setPayload(data)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [currentUser.id])
+
+  useEffect(() => {
+    loadNotifications()
+  }, [loadNotifications])
+
+  const items = [...(payload.items || [])].sort((a, b) =>
+    String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')),
+  )
+
+  const clearNotifications = async () => {
+    try {
+      await apiRequest('/notifications/read', { method: 'POST', userId: currentUser.id })
+      setPayload({ pending_documents: 0, items: [] })
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  return (
+    <div className="admin-panel standalone-panel notifications-page">
+      <div className="admin-heading">
+        <div>
+          <h1>Minhas notificações</h1>
+          <p>Atualizações de documentos, solicitações e aprovações.</p>
+        </div>
+        <div className="heading-actions">
+          <button className="ghost-btn" onClick={() => onNavigate('/')}>
+            <Home size={17} />
+            Home
+          </button>
+          <button className="ghost-btn" onClick={loadNotifications} disabled={loading}>
+            <Database size={17} />
+            Atualizar
+          </button>
+          <button className="ghost-btn" onClick={clearNotifications} disabled={loading || items.length === 0}>
+            <X size={17} />
+            Limpar
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="form-alert admin-alert"><AlertCircle size={17} />{error}</div>}
+      {!error && items.length === 0 && <div className="empty-panel">{loading ? 'Carregando notificações...' : 'Nenhuma notificação encontrada.'}</div>}
+
+      <div className="notification-timeline">
+        {items.map((item) => (
+          <article className="notification-card" key={item.id}>
+            <span className={`notification-dot ${item.status || 'pendente'}`} />
+            <div>
+              <strong>{notificationMessage(item, currentUser)}</strong>
+              <small>{formatDateTime(item.updated_at || item.created_at)}</small>
+              {item.feedback && <p>{item.feedback}</p>}
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ApprovalRequestsPage({ currentUser }) {
+  const [submissions, setSubmissions] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [rejectingSubmission, setRejectingSubmission] = useState(null)
+  const [search, setSearch] = useState('')
+  const [dateFilter, setDateFilter] = useState('')
+
+  const loadSubmissions = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const payload = await apiRequest('/submissions', { userId: currentUser.id })
+      setSubmissions(payload.submissions || [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [currentUser.id])
+
+  useEffect(() => {
+    loadSubmissions()
+  }, [loadSubmissions])
+
+  const approveSubmission = async (submission) => {
+    try {
+      await apiRequest(`/submissions/${submission.id}/approve`, { method: 'POST', userId: currentUser.id })
+      setNotice('Documento aprovado e publicado na base de PDFs.')
+      await loadSubmissions()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const rejectSubmission = (submission) => {
+    setRejectingSubmission(submission)
+  }
+
+  const confirmRejectSubmission = async (submission, feedback) => {
+    if (!feedback.trim()) {
+      setError('Informe o motivo da reprovacao.')
+      return
+    }
+    try {
+      await apiRequest(`/submissions/${submission.id}/reject`, {
+        method: 'POST',
+        userId: currentUser.id,
+        body: { feedback },
+      })
+      setNotice('Documento reprovado com feedback salvo.')
+      setRejectingSubmission(null)
+      await loadSubmissions()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const filteredSubmissions = useMemo(
+    () => filterSubmissions(submissions, search, dateFilter),
+    [submissions, search, dateFilter],
+  )
+
+  return (
+    <div className="admin-panel pdf-panel">
+      <div className="admin-heading">
+        <div>
+          <h1>Solicitações de documentos</h1>
+          <p>Acompanhe o fluxo completo e aprove ou reprove itens pendentes.</p>
+        </div>
+        <div className="heading-actions">
+          <button className="ghost-btn" onClick={loadSubmissions} disabled={loading}>
+            <Database size={17} />
+            Atualizar
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="form-alert admin-alert"><AlertCircle size={17} />{error}</div>}
+      {notice && <div className="success-alert admin-alert"><Check size={17} />{notice}</div>}
+
+      <SubmissionFilters
+        search={search}
+        dateFilter={dateFilter}
+        onSearchChange={setSearch}
+        onDateChange={setDateFilter}
+        onClear={() => {
+          setSearch('')
+          setDateFilter('')
+        }}
+      />
+
+      <SubmissionList
+        submissions={filteredSubmissions}
+        currentUser={currentUser}
+        emptyText={loading ? 'Carregando solicitações...' : 'Nenhuma solicitação encontrada.'}
+        onApprove={approveSubmission}
+        onReject={rejectSubmission}
+      />
+
+      {rejectingSubmission && (
+        <RejectReasonModal
+          submission={rejectingSubmission}
+          onClose={() => setRejectingSubmission(null)}
+          onConfirm={(feedback) => confirmRejectSubmission(rejectingSubmission, feedback)}
+        />
+      )}
+    </div>
+  )
+}
+
+function DocumentCards({ docs, currentUser, emptyText, actions }) {
+  if (!docs.length) return <div className="empty-panel">{emptyText}</div>
+
+  return (
+    <div className="documents-grid">
+      {docs.map((doc) => (
+        <article className="document-card" key={doc.id || doc.filename}>
+          <div className="document-topline">
+            <div className="document-icon"><FileText size={22} /></div>
+            <StatusBadge status={doc.status || (doc.active ? 'aprovado' : 'inactive')} />
+          </div>
+          <div className="document-body">
+            <h2>{doc.title || doc.filename}</h2>
+            <p>{doc.description || 'Sem descrição cadastrada.'}</p>
+            <span title={doc.filename}>{doc.filename}</span>
+          </div>
+          <div className="document-meta">
+            <span>{formatFileSize(doc.size)}</span>
+            <span>{formatDate(doc.updated_at || doc.created_at || doc.mtime)}</span>
+          </div>
+          <div className="document-actions">
+            <a className="icon-btn small link-btn" href={buildDocumentUrl(doc.filename, currentUser.id)} target="_blank" rel="noreferrer" aria-label="Abrir PDF">
+              <Eye size={16} />
+            </a>
+            {actions?.(doc)}
+          </div>
+        </article>
+      ))}
+    </div>
+  )
+}
+
+function SubmissionFilters({ search, dateFilter, onSearchChange, onDateChange, onClear }) {
+  return (
+    <div className="admin-toolbar submission-filters">
+      <label className="search-field">
+        <Search size={18} />
+        <input
+          type="search"
+          placeholder="Buscar por documento, usuário ou status..."
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+        />
+      </label>
+      <label className="date-filter-field">
+        <Clock size={17} />
+        <input
+          type="date"
+          value={dateFilter}
+          onChange={(event) => onDateChange(event.target.value)}
+        />
+      </label>
+      {(search || dateFilter) && (
+        <button className="ghost-btn" onClick={onClear}>
+          <X size={16} />
+          Limpar filtros
+        </button>
+      )}
+    </div>
+  )
+}
+
+function SubmissionList({ currentUser, emptyText, onApprove, onReject, onResubmit, submissions }) {
+  const [historySubmission, setHistorySubmission] = useState(null)
+
+  if (!submissions.length) return <div className="empty-panel">{emptyText}</div>
+
+  return (
+    <>
+      <div className="submission-list">
+        {submissions.map((submission) => (
+          <article className="submission-card" key={submission.id}>
+          <div className="submission-main">
+            <div className="document-icon"><FileText size={21} /></div>
+            <div>
+              <h2>{submission.title || submission.original_name || submission.filename}</h2>
+              <p>
+                {submission.uploader_name || submission.uploader_email || 'Usuário'} · Enviado em {formatDate(submission.created_at)}
+              </p>
+              {submission.feedback && <small>{submission.feedback}</small>}
+            </div>
+            <StatusBadge status={(submission.resubmission_count || 0) > 0 && (submission.status === 'pendente' || submission.status === 'pending') ? 'reenviado' : (submission.status || (submission.active ? 'aprovado' : 'inactive'))} />
+          </div>
+          <div className="submission-actions">
+            <a className="ghost-btn" href={buildSubmissionUrl(submission.id, 'raw', currentUser.id)} target="_blank" rel="noreferrer">
+              <Eye size={16} />
+              Original
+            </a>
+            <a className="ghost-btn" href={buildSubmissionUrl(submission.id, 'processed', currentUser.id)} target="_blank" rel="noreferrer">
+              <FileText size={16} />
+              Processado
+            </a>
+            <button className="ghost-btn" onClick={() => setHistorySubmission(submission)}>
+              <Clock size={16} />
+              Histórico
+            </button>
+            {onApprove && submission.status === 'pendente' && (
+              <button className="primary-btn" onClick={() => onApprove(submission)}>
+                <Check size={16} />
+                Aprovar
+              </button>
+            )}
+            {onReject && submission.status === 'pendente' && (
+              <button className="ghost-btn danger-text" onClick={() => onReject(submission)}>
+                <X size={16} />
+                Reprovar
+              </button>
+            )}
+            {onResubmit && submission.status === 'reprovado' && Number(submission.resubmission_count || 0) < 1 && (
+              <label className="ghost-btn file-resubmit-btn">
+                <FileUp size={16} />
+                Reenviar
+                <input
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  onChange={(event) => {
+                    const selectedFile = event.target.files?.[0]
+                    event.target.value = ''
+                    onResubmit(submission, selectedFile)
+                  }}
+                />
+              </label>
+            )}
+          </div>
+          </article>
+        ))}
+      </div>
+      {historySubmission && (
+        <HistoryModal
+          item={historySubmission}
+          title="Histórico da solicitação"
+          onClose={() => setHistorySubmission(null)}
+        />
+      )}
+    </>
+  )
+}
+
+function HistoryModal({ item, onClose, title }) {
+  return (
+    <div className="overlay" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="modal reject-modal history-modal" onClick={(event) => event.stopPropagation()}>
+        <button className="modal-back" onClick={onClose}>
+          <ChevronDown size={16} />
+          Voltar
+        </button>
+        <div>
+          <h2>{title}</h2>
+          <p>{item.title || item.original_name || item.filename}</p>
+        </div>
+        <DocumentTimeline events={item.history || []} fallbackDocument={item} />
+      </div>
+    </div>
+  )
+}
+
+function DocumentTimeline({ events, fallbackDocument }) {
+  const timeline = events.length
+    ? events
+    : [{
+        id: `fallback-${fallbackDocument.id}`,
+        event_type: fallbackDocument.status || 'pendente',
+        status: fallbackDocument.status,
+        created_at: fallbackDocument.updated_at || fallbackDocument.created_at,
+        user_name: fallbackDocument.uploader_name,
+        user_email: fallbackDocument.uploader_email,
+      }]
+
+  return (
+    <div className="document-timeline" aria-label="Linha do tempo da solicitação">
+      {timeline.map((event, index) => (
+        <div className="document-timeline-item" key={event.id || `${event.event_type}-${index}`}>
+          <span className={`timeline-dot ${event.status || event.event_type}`} />
+          <div>
+            <strong>{index + 1}. {eventLabel(event)}</strong>
+            <small>
+              {formatDateTime(event.created_at)}
+              {(event.user_name || event.user_email) && ` · ${event.user_name || event.user_email}`}
+            </small>
+            {event.message && <p>{event.message}</p>}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -2296,12 +3143,15 @@ function DocumentModal({ initialDocument, mode, onClose, onSave }) {
   )
 }
 
-function ProfilePage({ currentUser, onAccentChange }) {
+function ProfilePage({ currentUser, onAccentChange, onNavigate }) {
   const selectedAccent = currentUser.accentColor || DEFAULT_ACCENT.id
 
   return (
     <section className="profile-page">
       <div className="profile-card">
+        <button className="page-close-btn profile-close" onClick={() => onNavigate('/')} aria-label="Fechar perfil">
+          <X size={18} />
+        </button>
         <div className="profile-avatar">{getInitials(currentUser.name || currentUser.email)}</div>
         <div>
           <h1>{currentUser.name || 'Usuário'}</h1>
@@ -2328,8 +3178,8 @@ function ProfilePage({ currentUser, onAccentChange }) {
 
         <div className="profile-accent-panel">
           <div>
-            <strong>Cor de destaque</strong>
-            <span>Personaliza sua mensagem, o botão de envio e a saudação inicial.</span>
+            <strong>Personalizacao</strong>
+            <span>Ajuste a cor de destaque e o modo visual da interface.</span>
           </div>
           <div className="accent-options" role="radiogroup" aria-label="Cor de destaque">
             {ACCENT_COLORS.map((color) => (
@@ -2400,6 +3250,80 @@ function ConfirmModal({ confirmLabel, description, onCancel, onConfirm, title })
   )
 }
 
+function RejectReasonModal({ onClose, onConfirm, submission }) {
+  const [feedback, setFeedback] = useState(submission?.feedback || '')
+  const [error, setError] = useState('')
+
+  const submit = (event) => {
+    event.preventDefault()
+    if (!feedback.trim()) {
+      setError('Escreva o motivo da reprovação.')
+      return
+    }
+    onConfirm(feedback.trim())
+  }
+
+  return (
+    <div className="overlay" role="dialog" aria-modal="true">
+      <form className="modal reject-modal" onSubmit={submit}>
+        <button className="modal-close" type="button" onClick={onClose} aria-label="Fechar">
+          <X size={18} />
+        </button>
+        <button className="modal-back" type="button" onClick={onClose}>
+          <ChevronDown size={17} />
+          Voltar
+        </button>
+        <h2>Reprovar solicitação</h2>
+        <p>{submission?.title || submission?.original_name || submission?.filename}</p>
+        <label className="textarea-field">
+          Motivo para o usuário
+          <textarea
+            value={feedback}
+            onChange={(event) => {
+              setFeedback(event.target.value)
+              setError('')
+            }}
+            placeholder="Explique claramente o que precisa ser corrigido antes do reenvio."
+            rows={5}
+            autoFocus
+          />
+        </label>
+        {error && <div className="form-alert"><AlertCircle size={17} />{error}</div>}
+        <div className="confirm-row">
+          <button className="ghost-btn" type="button" onClick={onClose}>Cancelar</button>
+          <button className="primary-btn danger-action" type="submit">
+            <X size={17} />
+            Reprovar
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function PdfPreview({ label, url }) {
+  const previewUrl = `${url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`
+  return (
+    <div className="pdf-preview">
+      <div className="pdf-preview-head">
+        <FileText size={16} />
+        <strong>{label}</strong>
+        <a href={url} target="_blank" rel="noreferrer">
+          <Eye size={15} />
+          Abrir em nova aba
+        </a>
+      </div>
+      <object data={previewUrl} type="application/pdf" title={label}>
+        <div className="pdf-preview-fallback">
+          <FileText size={28} />
+          <strong>Prévia pronta</strong>
+          <span>Abra em nova aba para visualizar ou baixar o PDF formatado.</span>
+        </div>
+      </object>
+    </div>
+  )
+}
+
 function RoleBadge({ role }) {
   const Icon = roleIcons[role] || UserRound
 
@@ -2418,6 +3342,14 @@ function StatusBadge({ status }) {
       {statusLabels[status] || status}
     </span>
   )
+}
+
+function buildDocumentUrl(filename, userId) {
+  return `${API_BASE}/docs/${encodeURIComponent(filename)}/file?user_id=${encodeURIComponent(userId)}`
+}
+
+function buildSubmissionUrl(documentId, kind, userId) {
+  return `${API_BASE}/submissions/${encodeURIComponent(documentId)}/${kind}?user_id=${encodeURIComponent(userId)}`
 }
 
 async function apiRequest(endpoint, options = {}) {
@@ -2547,6 +3479,69 @@ function formatDate(value, fallback = '-') {
     month: 'short',
     year: 'numeric',
   }).format(date)
+}
+
+function formatDateTime(value, fallback = '-') {
+  if (!value) return fallback
+  const date = new Date(String(value).replace(' ', 'T'))
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function notificationMessage(item, currentUser) {
+  const title = item.title || item.original_name || item.filename || 'documento'
+  if (currentUser?.role === 'admin' && item.status === 'pendente') {
+    const name = item.uploader_name || item.uploader_email || 'Um usuário'
+    return `${name} enviou solicitação: ${title}`
+  }
+  if (item.status === 'aprovado') return `Sua solicitação foi aprovada: ${title}`
+  if (item.status === 'reprovado') return `Sua solicitação foi reprovada: ${title}`
+  if (item.status === 'pendente') return `Sua solicitação está pendente: ${title}`
+  return title
+}
+
+function eventLabel(event) {
+  const labels = {
+    enviado: 'Solicitação enviada',
+    processado: 'PDF formatado/processado',
+    pendente: 'Pendente de aprovação',
+    reprovado: 'Reprovado pelo administrador',
+    reenviado: 'Solicitação reenviada',
+    aprovado: 'Aprovado e publicado',
+    inserido: 'PDF inserido',
+    editado: 'PDF editado',
+    ativado: 'PDF ativado',
+    inativado: 'PDF inativado',
+    excluido: 'PDF excluído',
+  }
+  return labels[event.event_type] || labels[event.status] || event.event_type || 'Atualização'
+}
+
+function filterSubmissions(submissions, search, dateFilter) {
+  const query = search.trim().toLowerCase()
+  return [...submissions]
+    .sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')))
+    .filter((submission) => {
+      const dateSource = String(submission.updated_at || submission.created_at || '')
+      const matchesDate = !dateFilter || dateSource.startsWith(dateFilter)
+      if (!matchesDate) return false
+      if (!query) return true
+      return [
+        submission.title,
+        submission.original_name,
+        submission.filename,
+        submission.status,
+        submission.uploader_name,
+        submission.uploader_email,
+        submission.feedback,
+      ].some((value) => String(value || '').toLowerCase().includes(query))
+    })
 }
 
 function formatShortDate(value) {
