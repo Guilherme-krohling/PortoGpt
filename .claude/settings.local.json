@@ -1,7 +1,23 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m pip install jinja2 --quiet)"
+      "Bash(python -m pip install jinja2 --quiet)",
+      "Bash(Get-Process -Name python -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object Id, ProcessName, CommandLine)",
+      "Bash(pkill -f \"uvicorn\")",
+      "Bash(pkill -f \"main:app\")",
+      "Bash(nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload)",
+      "Bash(echo \"PID=$!\")",
+      "Bash(curl -s http://localhost:8000/api/docs)",
+      "Bash(\"/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe\" -c \"import groq; print\\(groq.__version__\\)\")",
+      "Bash(/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe -c ' *)",
+      "Bash(sleep 8 && cat /tmp/backend.log | tail -5)",
+      "Read(//tmp/**)",
+      "Bash(\"/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe\" -m pip show groq httpx)",
+      "Bash(\"/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe\" -m pip install \"groq>=0.13.0\" --quiet)",
+      "Bash(\"/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe\" -m pip show groq)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "PowerShell(Get-Command *)"
     ]
   }
 }

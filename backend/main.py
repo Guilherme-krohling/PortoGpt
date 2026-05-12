@@ -4,7 +4,7 @@ import chromadb
 import ingest
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi import BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
@@ -150,6 +150,20 @@ class DocumentUpdateRequest(BaseModel):
 
 class RejectDocumentRequest(BaseModel):
     feedback: str = ""
+
+
+class CreateTemplateRequest(BaseModel):
+    name: str
+    html: str
+    description: str = ""
+
+
+class SaveHtmlRequest(BaseModel):
+    html: str
+
+
+class ApplyTemplateRequest(BaseModel):
+    pdf_text: str
 
 
 def require_active_user(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
@@ -732,10 +746,80 @@ def resolve_managed_file(root: Path, filename: str):
     return safe_filename, file_path
 
 
-def process_document_template(raw_path: Path, processed_path: Path):
-    """Prepara o ponto de templatizacao antes da aprovacao."""
-    # TODO: substituir esta copia pela transformacao real usando template quando a regra estiver definida.
-    shutil.copyfile(raw_path, processed_path)
+def process_document_template(raw_path: Path, processed_path: Path) -> Path:
+    """Aplica o primeiro template HTML ativo ao PDF e salva o resultado formatado.
+
+    Retorna o caminho real do arquivo processado (pode ser .html ou .pdf).
+    """
+    try:
+        all_templates = database.listar_templates()
+        active_html = [t for t in all_templates if t.get("active") and str(t.get("filename", "")).endswith(".html")]
+
+        if not active_html:
+            shutil.copyfile(raw_path, processed_path)
+            return processed_path
+
+        template_path = TEMPLATES_DIR / active_html[0]["filename"]
+        if not template_path.exists():
+            shutil.copyfile(raw_path, processed_path)
+            return processed_path
+
+        import pypdf
+        reader = pypdf.PdfReader(str(raw_path))
+        pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+
+        template_source = template_path.read_text(encoding="utf-8")
+
+        RESERVED = {"page_number", "total_pages", "logo_url"}
+        variables = [
+            v for v in dict.fromkeys(re.findall(r"\{\{\s*(\w+)\s*\}\}", template_source))
+            if v not in RESERVED
+        ]
+
+        if not variables:
+            shutil.copyfile(raw_path, processed_path)
+            return processed_path
+
+        api_key = os.getenv("secret_key")
+        if not api_key:
+            shutil.copyfile(raw_path, processed_path)
+            return processed_path
+
+        fields_list = "\n".join(f"- {v}" for v in variables)
+        prompt = (
+            "Você receberá o texto extraído de um PDF e uma lista de campos de template.\n"
+            "Sua tarefa é extrair os valores correspondentes do texto e retornar um JSON com esses campos preenchidos.\n"
+            "Retorne APENAS o JSON, sem explicações adicionais.\n\n"
+            f"CAMPOS DO TEMPLATE:\n{fields_list}\n\n"
+            f"TEXTO DO PDF:\n{pdf_text[:6000]}\n\n"
+            "Retorne um JSON com os campos acima preenchidos com os valores encontrados no texto.\n"
+            "Se um campo não for encontrado, use uma string vazia."
+        )
+
+        groq_client = GroqDirect(api_key=api_key)
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
+        extracted = json_module.loads(response.choices[0].message.content)
+        extracted.setdefault("page_number", "1")
+        extracted.setdefault("total_pages", "1")
+        extracted.setdefault("logo_url", "")
+
+        env = Environment(loader=BaseLoader())
+        tmpl = env.from_string(template_source)
+        rendered_html = tmpl.render(**extracted)
+
+        html_path = processed_path.with_suffix(".html")
+        html_path.write_text(rendered_html, encoding="utf-8")
+        return html_path
+
+    except Exception as exc:
+        print(f"[process_document_template] Erro ao aplicar template: {exc}")
+        shutil.copyfile(raw_path, processed_path)
+        return processed_path
 
 
 def register_saved_document(filename: str, original_name: str, file_path: Path, title=None, description=None, uploaded_by=None, status="aprovado", raw_filename=None, processed_filename=None, approved_by=None):
@@ -797,7 +881,8 @@ def upload_endpoint(
         # Salvar arquivo em data/
         with open(dest_path, 'wb') as out:
             shutil.copyfileobj(file.file, out)
-        process_document_template(dest_path, processed_path)
+        actual_processed = process_document_template(dest_path, processed_path)
+        processed_name = actual_processed.name
 
         # Atualizar metadata
         if is_auto_approved:
@@ -806,12 +891,12 @@ def upload_endpoint(
             save_docs_metadata(meta)
             document = register_saved_document(
                 filename, file.filename, dest_path, uploaded_by=user["id"],
-                status="aprovado", raw_filename=filename, processed_filename=filename, approved_by=user["id"],
+                status="aprovado", raw_filename=filename, processed_filename=processed_name, approved_by=user["id"],
             )
             database.registrar_evento_documento(document["id"], "inserido", "aprovado", "Upload pelo chat com aprovação automatica.", user["id"])
             database.registrar_evento_documento(document["id"], "aprovado", "aprovado", "Documento publicado automaticamente por perfil interno.", user["id"])
         else:
-            stat = processed_path.stat()
+            stat = actual_processed.stat()
             result = database.registrar_documento(
                 filename=filename,
                 original_name=file.filename,
@@ -823,7 +908,7 @@ def upload_endpoint(
                 uploaded_by=user["id"],
                 status="pendente",
                 raw_filename=filename,
-                processed_filename=filename,
+                processed_filename=processed_name,
             )
             if not result["success"]:
                 raise HTTPException(status_code=500, detail=result["message"])
@@ -933,6 +1018,10 @@ def view_processed_submission(document_id: int, user_id: Optional[int] = None, x
         raise HTTPException(status_code=403, detail="Acesso negado")
     processed_name = doc.get("processed_filename") or doc["filename"]
     processed_path = PROCESSED_UPLOADS_DIR / processed_name
+
+    if processed_name.endswith(".html") and processed_path.exists():
+        return HTMLResponse(processed_path.read_text(encoding="utf-8"))
+
     root = PROCESSED_UPLOADS_DIR if processed_path.exists() else DATA_DIR
     _, file_path = resolve_managed_file(root, processed_name)
     headers = {"Content-Disposition": f'inline; filename="{doc.get("original_name") or doc["filename"]}"'}
@@ -1167,16 +1256,16 @@ DEFAULT_TEMPLATE_HTML = (
     '  <meta charset="UTF-8" />\n'
     '  <style>\n'
     '    * { box-sizing: border-box; margin: 0; padding: 0; }\n'
-    '    body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; }\n'
+    '    body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; min-height: 100vh; display: flex; flex-direction: column; padding-bottom: 64px; }\n'
     '    header { display: flex; align-items: center; padding: 18px 40px; border-bottom: 2px solid #0b4fd8; position: relative; }\n'
     '    .logo-ph { height: 48px; width: 80px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 10pt; border-radius: 4px; flex-shrink: 0; }\n'
     '    .company { position: absolute; left: 0; right: 0; text-align: center; font-size: 18pt; font-weight: 700; color: #0b4fd8; pointer-events: none; }\n'
     '    .doc-title { text-align: center; padding: 28px 40px 12px; font-size: 16pt; font-weight: 700; }\n'
-    '    main { padding: 0 40px 40px; }\n'
+    '    main { flex: 1; padding: 0 40px 40px; }\n'
     '    .field { margin-bottom: 22px; }\n'
     '    .field-label { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #0b4fd8; margin-bottom: 6px; }\n'
     '    .field-value { font-size: 11pt; color: #333; line-height: 1.6; }\n'
-    '    footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 40px; border-top: 1px solid #ddd; }\n'
+    '    footer { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; padding: 12px 40px; border-top: 1px solid #ddd; background: #fff; z-index: 10; }\n'
     '    .footer-ph { height: 28px; width: 48px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-size: 8pt; border-radius: 3px; }\n'
     '    .page-num { font-size: 9pt; color: #888; }\n'
     '  </style>\n'
@@ -1279,7 +1368,7 @@ def preview_template(filename: str, admin_user=Depends(require_admin)):
 
 
 @app.post("/api/templates/{filename}/apply")
-def apply_template(filename: str, request: ApplyTemplateRequest, admin_user=Depends(require_admin)):
+def apply_template(filename: str, request: ApplyTemplateRequest, current_user=Depends(require_active_user)):
     """Extrai campos do PDF bruto e preenche o template Jinja2 com IA."""
     safe_filename, file_path = resolve_template_file(filename)
     try:

@@ -1,6 +1,6 @@
 # Pacotes do LLM e API
 # Usamos == para travar a versão exatamente
-groq==0.11.0
+groq>=1.2.0
 python-dotenv==1.0.1
 
 # Pacotes LlamaIndex

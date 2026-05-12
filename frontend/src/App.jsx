@@ -12,6 +12,7 @@ import {
   Clock,
   Code2,
   Database,
+  Download,
   Eye,
   FileText,
   FileUp,
@@ -38,6 +39,8 @@ import {
   UserX,
   Users,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react'
 import './App.css'
 
@@ -753,6 +756,8 @@ function TopBar({
   )
 }
 
+const TEMPLATE_INTENT_RE = /template|aplicar\s+template|colocar\s+no\s+template|encaixar\s+no\s+template|usar\s+template|formatar\s+com\s+template|gerar\s+com\s+template|quero\s+template/i
+
 function ChatPage({ currentUser, onSessionChange, sessionId }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -761,6 +766,8 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
   const [currentSessionId, setCurrentSessionId] = useState(sessionId || null)
   const [welcomeSuggestions, setWelcomeSuggestions] = useState([])
   const [file, setFile] = useState(null)
+  const [templateViewerHtml, setTemplateViewerHtml] = useState(null)
+  const [templateViewerTitle, setTemplateViewerTitle] = useState('')
   const chatContainerRef = useRef(null)
   const fileInput = useRef(null)
 
@@ -890,9 +897,64 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     }
   }, [messages, loading])
 
+  const applyTemplateInChat = async (template, pdfText) => {
+    setLoading(true)
+    setMessages((prev) => [...prev, { role: 'assistant', text: `Aplicando o template **${template.title || template.filename}**…` }])
+    try {
+      const result = await apiRequest(`/templates/${encodeURIComponent(template.filename)}/apply`, {
+        method: 'POST',
+        userId: currentUser.id,
+        body: { pdf_text: pdfText },
+      })
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          text: 'Documento formatado com sucesso! Clique para visualizar.',
+          templateResult: { html: result.html, title: template.title || template.filename },
+        },
+      ])
+    } catch (err) {
+      setMessages((prev) => [...prev, { role: 'assistant', text: `Erro ao aplicar template: ${err.message}` }])
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const sendMessage = async (overrideText) => {
     const text = String(overrideText ?? input).trim()
     if (!text || loading || historyLoading) return
+
+    if (TEMPLATE_INTENT_RE.test(text)) {
+      setMessages((prev) => [...prev, { role: 'user', text }])
+      setInput('')
+      setLoading(true)
+      try {
+        const payload = await apiRequest('/templates', { userId: currentUser.id })
+        const activeTemplates = (payload.templates || []).filter((t) => t.active)
+        const pdfContext = messages
+          .map((m) => m.text)
+          .filter(Boolean)
+          .join('\n')
+        if (!activeTemplates.length) {
+          setMessages((prev) => [...prev, { role: 'assistant', text: 'Nenhum template ativo cadastrado. Peça ao administrador para criar ou ativar um.' }])
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              text: 'Escolha o template para aplicar ao conteúdo desta conversa:',
+              templateSelect: { templates: activeTemplates, pdfContext },
+            },
+          ])
+        }
+      } catch {
+        setMessages((prev) => [...prev, { role: 'assistant', text: 'Não foi possível carregar os templates.' }])
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
 
     setMessages((prev) => [...prev, { role: 'user', text }])
     setInput('')
@@ -982,6 +1044,13 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
 
   return (
     <>
+      {templateViewerHtml && (
+        <HtmlDocViewer
+          html={templateViewerHtml}
+          title={templateViewerTitle}
+          onClose={() => { setTemplateViewerHtml(null); setTemplateViewerTitle('') }}
+        />
+      )}
       <div className="chat-area" ref={chatContainerRef}>
         {historyLoading ? (
           <div className="welcome-screen loading-history">
@@ -1045,6 +1114,33 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
                     )}
                     {message.previewUrl && (
                       <PdfPreview url={message.previewUrl} label={message.previewLabel || 'Prévia do PDF'} />
+                    )}
+                    {message.templateSelect && (
+                      <div className="template-select-buttons">
+                        {message.templateSelect.templates.map((tpl) => (
+                          <button
+                            key={tpl.filename}
+                            className="template-select-btn"
+                            onClick={() => applyTemplateInChat(tpl, message.templateSelect.pdfContext)}
+                            disabled={loading}
+                          >
+                            <LayoutTemplate size={15} />
+                            {tpl.title || tpl.filename}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {message.templateResult && (
+                      <button
+                        className="primary-btn template-result-btn"
+                        onClick={() => {
+                          setTemplateViewerHtml(message.templateResult.html)
+                          setTemplateViewerTitle(message.templateResult.title)
+                        }}
+                      >
+                        <Eye size={15} />
+                        Visualizar documento formatado
+                      </button>
                     )}
                   </div>
                 </div>
@@ -3108,20 +3204,20 @@ function generateTemplateHtml({ name, category, header, footer, fields }) {
   <meta charset="UTF-8" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; }
+    body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; min-height: 100vh; display: flex; flex-direction: column; padding-bottom: 64px; }
     header { display: flex; align-items: center; padding: 18px 40px; border-bottom: 2px solid #0b4fd8; position: relative; }
     .header-logo { height: 48px; max-width: 120px; object-fit: contain; }
     .logo-ph { height: 48px; width: 80px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 10pt; border-radius: 4px; flex-shrink: 0; }
     .company { position: absolute; left: 0; right: 0; text-align: center; font-size: 18pt; font-weight: 700; color: #0b4fd8; pointer-events: none; }
     .doc-title { text-align: center; padding: 28px 40px 12px; font-size: 16pt; font-weight: 700; }
     .doc-category { text-align: center; font-size: 10pt; color: #666; margin-bottom: 28px; }
-    main { padding: 0 40px 40px; }
+    main { flex: 1; padding: 0 40px 40px; }
     .field { margin-bottom: 22px; }
     .field-label { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #0b4fd8; margin-bottom: 6px; }
     .field-value { font-size: 11pt; color: #333; line-height: 1.6; }
     .field-table { width: 100%; border-collapse: collapse; font-size: 10pt; }
     .field-table td { border: 1px solid #ddd; padding: 6px 10px; }
-    footer { display: flex; align-items: center; justify-content: ${footerJustify}; padding: 12px 40px; border-top: 1px solid #ddd; }
+    footer { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: ${footerJustify}; padding: 12px 40px; border-top: 1px solid #ddd; background: #fff; z-index: 10; }
     .footer-logo { height: 32px; max-width: 80px; object-fit: contain; }
     .footer-ph { height: 32px; width: 56px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-size: 8pt; border-radius: 3px; }
     .page-num { font-size: 9pt; color: #888; }
@@ -3339,11 +3435,61 @@ function CreateTemplateModal({ onClose, onCreate }) {
   )
 }
 
+function HtmlDocViewer({ html, title, onClose }) {
+  const [zoom, setZoom] = useState(100)
+  const iframeRef = useRef(null)
+
+  const handleDownload = () => {
+    const win = window.open('', '_blank')
+    if (!win) return
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    setTimeout(() => win.print(), 400)
+  }
+
+  return (
+    <div className="doc-viewer-overlay">
+      <div className="doc-viewer-toolbar">
+        <button className="ghost-btn doc-viewer-close" onClick={onClose} title="Fechar">
+          <X size={18} />
+        </button>
+        <span className="doc-viewer-title">{title}</span>
+        <div className="doc-viewer-zoom">
+          <button className="ghost-btn" onClick={() => setZoom((z) => Math.max(40, z - 10))} title="Reduzir zoom">
+            <ZoomOut size={16} />
+          </button>
+          <span className="doc-viewer-zoom-val">{zoom}%</span>
+          <button className="ghost-btn" onClick={() => setZoom((z) => Math.min(200, z + 10))} title="Aumentar zoom">
+            <ZoomIn size={16} />
+          </button>
+        </div>
+        <button className="ghost-btn" onClick={handleDownload} title="Baixar / Imprimir como PDF">
+          <Download size={16} />
+          Baixar PDF
+        </button>
+      </div>
+      <div className="doc-viewer-body">
+        <div className="doc-viewer-page-wrap" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center' }}>
+          <iframe
+            ref={iframeRef}
+            srcDoc={html}
+            className="doc-viewer-iframe"
+            title={title}
+            sandbox="allow-same-origin"
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function TemplateEditorView({ template, onBack, onSave, currentUser }) {
   const [html, setHtml] = useState(template.html)
   const [previewSrc, setPreviewSrc] = useState('')
   const [compiling, setCompiling] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [viewerHtml, setViewerHtml] = useState(null)
   const prevBlobUrl = useRef(null)
 
   function compileLocal(source) {
@@ -3387,39 +3533,48 @@ function TemplateEditorView({ template, onBack, onSave, currentUser }) {
   }
 
   return (
-    <div className="tpl-editor-overlay">
-      <div className="tpl-editor-topbar">
-        <button className="ghost-btn" onClick={onBack}>
-          <ChevronLeft size={17} />
-          Voltar
-        </button>
-        <span className="tpl-editor-name">{template.title}</span>
-        <button className="primary-btn" onClick={handleSave} disabled={saving}>
-          <Save size={16} />
-          {saving ? 'Salvando...' : 'Salvar template'}
-        </button>
-      </div>
+    <>
+      {viewerHtml && (
+        <HtmlDocViewer html={viewerHtml} title={template.title} onClose={() => setViewerHtml(null)} />
+      )}
+      <div className="tpl-editor-overlay">
+        <div className="tpl-editor-topbar">
+          <button className="ghost-btn" onClick={onBack}>
+            <ChevronLeft size={17} />
+            Voltar
+          </button>
+          <span className="tpl-editor-name">{template.title}</span>
+          <button className="ghost-btn" onClick={() => setViewerHtml(html)} title="Visualizar como documento">
+            <Eye size={16} />
+            Visualizar
+          </button>
+          <button className="primary-btn" onClick={handleSave} disabled={saving}>
+            <Save size={16} />
+            {saving ? 'Salvando...' : 'Salvar template'}
+          </button>
+        </div>
 
-      <div className="tpl-editor-body">
-        <div className="tpl-editor-pane tpl-editor-code">
-          <textarea
-            className="tpl-html-textarea"
-            value={html}
-            onChange={(e) => setHtml(e.target.value)}
-            spellCheck={false}
-          />
-        </div>
-        <div className="tpl-editor-pane tpl-editor-preview">
-          <div className="tpl-preview-bar">
-            <button className="ghost-btn" onClick={compileFromServer} disabled={compiling}>
-              <RefreshCw size={15} className={compiling ? 'spin' : ''} />
-              {compiling ? 'Compilando...' : 'Recompilar'}
-            </button>
+        <div className="tpl-editor-body">
+          <div className="tpl-editor-pane tpl-editor-code">
+            <textarea
+              className="tpl-html-textarea"
+              value={html}
+              onChange={(e) => setHtml(e.target.value)}
+              spellCheck={false}
+            />
           </div>
-          <iframe src={previewSrc} className="tpl-preview-iframe" title="Preview do template" />
+          <div className="tpl-editor-pane tpl-editor-preview">
+            <div className="tpl-preview-bar">
+              <button className="ghost-btn" onClick={compileFromServer} disabled={compiling}>
+                <RefreshCw size={15} className={compiling ? 'spin' : ''} />
+                {compiling ? 'Compilando...' : 'Recompilar'}
+              </button>
+            </div>
+            <iframe src={previewSrc} className="tpl-preview-iframe" title="Preview do template" />
+          </div>
         </div>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -3794,7 +3949,6 @@ function RejectReasonModal({ onClose, onConfirm, submission }) {
 }
 
 function PdfPreview({ label, url }) {
-  const previewUrl = `${url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`
   return (
     <div className="pdf-preview">
       <div className="pdf-preview-head">
@@ -3805,13 +3959,7 @@ function PdfPreview({ label, url }) {
           Abrir em nova aba
         </a>
       </div>
-      <object data={previewUrl} type="application/pdf" title={label}>
-        <div className="pdf-preview-fallback">
-          <FileText size={28} />
-          <strong>Prévia pronta</strong>
-          <span>Abra em nova aba para visualizar ou baixar o PDF formatado.</span>
-        </div>
-      </object>
+      <iframe src={url} title={label} className="pdf-preview-iframe" />
     </div>
   )
 }
