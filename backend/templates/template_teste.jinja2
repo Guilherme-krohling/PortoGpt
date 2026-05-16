@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>{{ paginas[0].documento.titulo }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 50pt 90pt 50pt 90pt;
+    }
+
+    body {
+      font-family: "Calibri", "Helvetica", sans-serif;
+      font-size: 12pt;
+      font-weight:400;
+      color: #000;
+      margin: 0;
+      padding: 0;
+    }
+
+    .pagina {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    .quebra-pagina { 
+      page-break-after: always; 
+    }
+
+    /* CABEÇALHO */
+    .cabecalho {
+      display: flex;
+      align-items: center;
+      padding-bottom: 16px;
+      margin-bottom: 32px;
+    }
+
+    .cabecalho img {
+      max-height: 42pt;
+      max-width: 115pt;
+      margin-right: 20px;
+    }
+
+    .cabecalho-texto h1 {
+      margin: 0;
+      font-size: 16pt;
+    }
+
+    .cabecalho-texto p {
+      margin: 2px 0 0;
+      font-size: 10pt;
+      color: #555;
+    }
+
+    /* TÍTULO DO DOCUMENTO */
+    .titulo-documento {
+      text-align: center;
+      font-size: 16pt;
+      font-weight: 700;
+      margin-bottom: 23pt;
+    }
+
+    /* CORPO */
+    .corpo p {
+      text-align: justify;
+      line-height: 1.2em;
+      margin-bottom: 16px;
+    }
+
+    .corpo img {
+        max-width: 100%;
+        height: auto;
+    }
+
+    /* RODAPÉ */
+    .rodape {
+      /*border: red 1px dashed;*/
+      padding-top: 16px;
+      position: fixed;
+      bottom: -1.3cm;
+      left: -2cm;
+      right: -2cm;
+      font-size: 9pt;
+      color: #555;
+    }
+
+    .rodape-info {
+      /*border: blue 1px dashed;*/
+      line-height: 1.6;
+    }
+
+    .rodape-logos {
+      /*border: red 1px solid;*/
+      height: 3cm;
+      width: 100%;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 1px;
+    }
+
+    .rodape-logos img {
+      /*border: blue 1px solid;*/
+      max-height: 100%;
+      max-width: 100%;
+      min-width: 0;
+      min-height: 0;
+      object-fit: contain;
+    }
+</style>
+</head>
+<body>
+  {% for pagina in paginas %}
+    {% set cabecalho = pagina.cabecalho %}
+    {% set documento = pagina.documento %}
+    {% set rodape = pagina.rodape %}
+    <div class="pagina {% if not loop.last %}quebra-pagina{% endif %}">
+      {# --- CABEÇALHO --- #}
+      <header class="cabecalho">
+        {% for img in cabecalho.url_img %}
+          <img src="{{ img }}" />
+        {% endfor %}
+        <div class="cabecalho-texto">
+          {% if cabecalho.nome_empresa %}
+            <h1>{{ cabecalho.nome_empresa }}</h1>
+          {% endif %}
+          {% if cabecalho.subtitulo_empresa %}
+            <p>{{ cabecalho.subtitulo_empresa }}</p>
+          {% endif %}
+        </div>
+      </header>
+
+      {# --- TÍTULO DO DOCUMENTO --- #}
+      {% if loop.first %}
+        <div class="titulo-documento">
+          {{ documento.titulo }}
+        </div>
+      {% endif %}
+
+      {# --- CORPO --- #}
+      <main class="corpo">
+        {% for paragrafo in documento.paragrafos %}
+          {% if paragrafo.titulo_2 %}
+            <div class="title2">
+              {{ paragrafo.titulo_2 }}
+            </div>
+          {% endif %}
+
+          {% if paragrafo.titulo_3 %}
+            <div class="title3">
+              {{ paragrafo.titulo_3 }}
+            </div>
+          {% endif %}
+
+          {% if paragrafo.paragrafo %}<p>{{ paragrafo.paragrafo }}</p>{% endif %}
+          
+          {% if paragrafo.url_img %}
+            <div style="text-align: center; margin: 20px 0;">
+                <img src="{{ paragrafo.url_img }}">
+            </div>
+          {% endif %}
+
+        {% endfor %}
+      </main>
+
+      {# --- RODAPÉ --- #}
+      <footer class="rodape">
+        <div class="rodape-info">
+          {% if rodape.endereco %}<span>{{ rodape.endereco }}</span><br/>{% endif %}
+          {% if rodape.telefone %}<span>Tel.: {{ rodape.telefone }}</span><br/>{% endif %}
+          {% if rodape.email %}<span>{{ rodape.email }}</span><br/>{% endif %}
+          {% if rodape.site %}<span>{{ rodape.site }}</span>{% endif %}
+        </div>
+        {% if rodape.url_img %}
+        <div class="rodape-logos">
+          {% for img in rodape.url_img %}
+          <img src="{{ img }}" />
+          {% endfor %}
+        </div>
+        {% endif %}
+      </footer>
+
+    </div>
+  {% endfor %}
+</body>
+</html>

@@ -1,6 +1,8 @@
 import os
 import chromadb
 import ingest
+import processamento_template
+import processamento_dados
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -725,14 +727,14 @@ def resolve_managed_file(root: Path, filename: str):
     file_path = (root / safe_filename).resolve()
     root_path = root.resolve()
     if not str(file_path).startswith(str(root_path)) or not file_path.exists():
-        raise HTTPException(status_code=404, detail="Arquivo nÃ£o encontrado")
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     return safe_filename, file_path
 
 
 def process_document_template(raw_path: Path, processed_path: Path):
     """Prepara o ponto de templatizacao antes da aprovacao."""
-    # TODO: substituir esta copia pela transformacao real usando template quando a regra estiver definida.
-    shutil.copyfile(raw_path, processed_path)
+    doc_content = processamento_dados.ler_doc(Settings.llm, DATA_DIR / "dispensadiadotrabalhador_editado.pdf")
+    processamento_template.processar_template(doc_content)
 
 
 def register_saved_document(filename: str, original_name: str, file_path: Path, title=None, description=None, uploaded_by=None, status="aprovado", raw_filename=None, processed_filename=None, approved_by=None):
@@ -925,7 +927,7 @@ def view_processed_submission(document_id: int, user_id: Optional[int] = None, x
     current_user = require_active_user(x_user_id or user_id)
     doc = database.obter_documento_por_id(document_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+        raise HTTPException(status_code=404, detail="Documento não encontrado")
     if current_user.get("role") not in {"admin", "editor"} and doc.get("uploaded_by") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Acesso negado")
     processed_name = doc.get("processed_filename") or doc["filename"]
@@ -984,13 +986,13 @@ def resubmit_submission(
 ):
     doc = database.obter_documento_por_id(document_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+        raise HTTPException(status_code=404, detail="Documento não encontrado")
     if doc.get("uploaded_by") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Acesso negado")
     if doc.get("status") != "reprovado":
         raise HTTPException(status_code=400, detail="Somente documentos reprovados podem ser reenviados")
     if int(doc.get("resubmission_count") or 0) >= 1:
-        raise HTTPException(status_code=400, detail="Limite de reenvio atingido para esta solicitaÃ§Ã£o")
+        raise HTTPException(status_code=400, detail="Limite de reenvio atingido para esta solicitação")
 
     filename = doc["filename"]
     raw_path = RAW_UPLOADS_DIR / filename
