@@ -733,8 +733,8 @@ def resolve_managed_file(root: Path, filename: str):
 
 def process_document_template(raw_path: Path, processed_path: Path):
     """Prepara o ponto de templatizacao antes da aprovacao."""
-    doc_content = processamento_dados.ler_doc(Settings.llm, DATA_DIR / "dispensadiadotrabalhador_editado.pdf")
-    processamento_template.processar_template(doc_content)
+    doc_content = processamento_dados.ler_doc(Settings.llm, raw_path)
+    processamento_template.processar_template(doc_content, processed_path)
 
 
 def register_saved_document(filename: str, original_name: str, file_path: Path, title=None, description=None, uploaded_by=None, status="aprovado", raw_filename=None, processed_filename=None, approved_by=None):
