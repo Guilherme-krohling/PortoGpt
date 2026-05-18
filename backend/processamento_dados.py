@@ -156,4 +156,4 @@ if __name__ == "__main__":
     api_key = os.getenv("secret_key")
     Settings.llm = Groq(model="llama-3.3-70b-versatile", api_key=api_key)
     doc_content = ler_doc(Settings.llm, DIR / "data" / "dispensadiadotrabalhador_editado.pdf")
-    processamento_template.processar_template(doc_content)
+    processamento_template.processar_template(doc_content, DIR / "processed_uploads" / "documento_teste_final.pdf")
