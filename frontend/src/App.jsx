@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
@@ -766,6 +767,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
   const [currentSessionId, setCurrentSessionId] = useState(sessionId || null)
   const [welcomeSuggestions, setWelcomeSuggestions] = useState([])
   const [file, setFile] = useState(null)
+  const [lastUploadedPdfText, setLastUploadedPdfText] = useState('')
   const [templateViewerHtml, setTemplateViewerHtml] = useState(null)
   const [templateViewerTitle, setTemplateViewerTitle] = useState('')
   const chatContainerRef = useRef(null)
@@ -897,21 +899,52 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     }
   }, [messages, loading])
 
-  const applyTemplateInChat = async (template, pdfText) => {
+  const applyTemplateWithFile = async (template, file) => {
     setLoading(true)
-    setMessages((prev) => [...prev, { role: 'assistant', text: `Aplicando o template **${template.title || template.filename}**…` }])
+    setMessages((prev) => [...prev, {
+      role: 'assistant',
+      text: `Aplicando o template **${template.title || template.filename}** ao arquivo **${file.name}**…`,
+    }])
     try {
-      const result = await apiRequest(`/templates/${encodeURIComponent(template.filename)}/apply`, {
+      const formData = new FormData()
+      formData.append('file', file)
+      const result = await apiRequest(`/templates/${encodeURIComponent(template.filename)}/apply-file`, {
         method: 'POST',
         userId: currentUser.id,
-        body: { pdf_text: pdfText },
+        body: formData,
       })
+      // Usa o identificador do documento extraído como nome; fallback para título do template
+      const fields = result.fields || {}
+      const docName =
+        fields.numero_relatorio ||
+        fields.numero ||
+        fields.codigo ||
+        fields.titulo ||
+        template.title ||
+        'documento'
+      const assistantText = 'Documento formatado com sucesso! Clique para visualizar.'
+      try {
+        const saveRes = await apiRequest('/chat/history', {
+          method: 'POST',
+          body: {
+            user_id: currentUser.id,
+            session_id: currentSessionId,
+            user_message: `*Aplicou template ${template.title || template.filename} no arquivo ${file.name}*`,
+            assistant_message: assistantText,
+          }
+        })
+        if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
+          setCurrentSessionId(saveRes.session_id)
+          onSessionChange?.(saveRes.session_id)
+        }
+      } catch (e) {}
+
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          text: 'Documento formatado com sucesso! Clique para visualizar.',
-          templateResult: { html: result.html, title: template.title || template.filename },
+          text: assistantText,
+          templateResult: { html: result.html, title: docName },
         },
       ])
     } catch (err) {
@@ -932,18 +965,38 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
       try {
         const payload = await apiRequest('/templates', { userId: currentUser.id })
         const activeTemplates = (payload.templates || []).filter((t) => t.active)
-        const pdfContext = messages
-          .map((m) => m.text)
-          .filter(Boolean)
-          .join('\n')
+        // Preferir o texto extraído diretamente do PDF enviado; fallback para histórico do chat
+        const pdfContext = lastUploadedPdfText || messages.map((m) => m.text).filter(Boolean).join('\n')
         if (!activeTemplates.length) {
-          setMessages((prev) => [...prev, { role: 'assistant', text: 'Nenhum template ativo cadastrado. Peça ao administrador para criar ou ativar um.' }])
+          const assistantText = 'Nenhum template ativo cadastrado. Peça ao administrador para criar ou ativar um.'
+          try {
+            const saveRes = await apiRequest('/chat/history', {
+              method: 'POST',
+              body: { user_id: currentUser.id, session_id: currentSessionId, user_message: text, assistant_message: assistantText }
+            })
+            if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
+              setCurrentSessionId(saveRes.session_id)
+              onSessionChange?.(saveRes.session_id)
+            }
+          } catch (e) {}
+          setMessages((prev) => [...prev, { role: 'assistant', text: assistantText }])
         } else {
+          const assistantText = 'Escolha o template desejado e selecione o PDF a formatar:'
+          try {
+            const saveRes = await apiRequest('/chat/history', {
+              method: 'POST',
+              body: { user_id: currentUser.id, session_id: currentSessionId, user_message: text, assistant_message: assistantText }
+            })
+            if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
+              setCurrentSessionId(saveRes.session_id)
+              onSessionChange?.(saveRes.session_id)
+            }
+          } catch (e) {}
           setMessages((prev) => [
             ...prev,
             {
               role: 'assistant',
-              text: 'Escolha o template para aplicar ao conteúdo desta conversa:',
+              text: assistantText,
               templateSelect: { templates: activeTemplates, pdfContext },
             },
           ])
@@ -1021,6 +1074,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
       } else if (data.session_id) {
         onSessionChange?.(data.session_id)
       }
+      if (data.pdf_text) setLastUploadedPdfText(data.pdf_text)
       setMessages((prev) => [...prev, {
         role: 'assistant',
         text: data.response,
@@ -1117,12 +1171,24 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
                     )}
                     {message.templateSelect && (
                       <div className="template-select-buttons">
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 8px 0' }}>
+                          Clique no template e selecione o PDF a formatar:
+                        </p>
                         {message.templateSelect.templates.map((tpl) => (
                           <button
                             key={tpl.filename}
                             className="template-select-btn"
-                            onClick={() => applyTemplateInChat(tpl, message.templateSelect.pdfContext)}
                             disabled={loading}
+                            onClick={() => {
+                              const input = document.createElement('input')
+                              input.type = 'file'
+                              input.accept = '.pdf'
+                              input.onchange = (e) => {
+                                const f = e.target.files?.[0]
+                                if (f) applyTemplateWithFile(tpl, f)
+                              }
+                              input.click()
+                            }}
                           >
                             <LayoutTemplate size={15} />
                             {tpl.title || tpl.filename}
@@ -3169,7 +3235,7 @@ function generateTemplateHtml({ name, category, header, footer, fields }) {
       const v = makeVar(f.label)
       const val =
         f.type === 'paragraph'
-          ? `<p class="field-value">{{ ${v} }}</p>`
+          ? `<div class="field-value">{{ ${v} }}</div>`
           : f.type === 'table'
           ? `<table class="field-table">\n        {% for row in ${v}_rows %}\n        <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>\n        {% endfor %}\n      </table>`
           : `<span class="field-value">{{ ${v} }}</span>`
@@ -3439,20 +3505,65 @@ function HtmlDocViewer({ html, title, onClose }) {
   const [zoom, setZoom] = useState(100)
   const iframeRef = useRef(null)
 
-  const handleDownload = () => {
-    const win = window.open('', '_blank')
-    if (!win) return
-    win.document.write(html)
-    win.document.close()
-    win.focus()
-    setTimeout(() => win.print(), 400)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState(null)
+
+  const handleDownloadPdf = async () => {
+    setDownloading(true)
+    setDownloadError(null)
+    const safeName =
+      String(title || 'documento')
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+        .trim() || 'documento'
+
+    try {
+      const body = new URLSearchParams()
+      body.append('html', html)
+      body.append('filename', safeName)
+
+      const res = await fetch(`${API_BASE}/render-pdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      })
+
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`
+        try {
+          const payload = await res.json()
+          if (payload?.detail) detail = payload.detail
+        } catch {
+          try {
+            const txt = await res.text()
+            if (txt) detail = txt
+          } catch {}
+        }
+        throw new Error(detail)
+      }
+
+      const blob = await res.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = `${safeName}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+    } catch (err) {
+      console.error('[render-pdf] download falhou:', err)
+      setDownloadError(err.message || 'Erro desconhecido ao gerar PDF')
+    } finally {
+      setDownloading(false)
+    }
   }
 
-  return (
+  return createPortal(
     <div className="doc-viewer-overlay">
       <div className="doc-viewer-toolbar">
         <button className="ghost-btn doc-viewer-close" onClick={onClose} title="Fechar">
           <X size={18} />
+          Fechar
         </button>
         <span className="doc-viewer-title">{title}</span>
         <div className="doc-viewer-zoom">
@@ -3464,11 +3575,24 @@ function HtmlDocViewer({ html, title, onClose }) {
             <ZoomIn size={16} />
           </button>
         </div>
-        <button className="ghost-btn" onClick={handleDownload} title="Baixar / Imprimir como PDF">
+        <button className="ghost-btn" onClick={handleDownloadPdf} disabled={downloading} title="Baixar como PDF">
           <Download size={16} />
-          Baixar PDF
+          {downloading ? 'Gerando PDF…' : 'Baixar PDF'}
         </button>
       </div>
+      {downloadError && (
+        <div
+          className="form-alert"
+          style={{ margin: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}
+          role="alert"
+        >
+          <AlertCircle size={16} />
+          <span style={{ flex: 1 }}>{downloadError}</span>
+          <button className="ghost-btn" onClick={() => setDownloadError(null)} title="Fechar aviso">
+            <X size={14} />
+          </button>
+        </div>
+      )}
       <div className="doc-viewer-body">
         <div className="doc-viewer-page-wrap" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center' }}>
           <iframe
@@ -3476,11 +3600,12 @@ function HtmlDocViewer({ html, title, onClose }) {
             srcDoc={html}
             className="doc-viewer-iframe"
             title={title}
-            sandbox="allow-same-origin"
+            sandbox="allow-same-origin allow-scripts allow-modals"
           />
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -3506,6 +3631,7 @@ function TemplateEditorView({ template, onBack, onSave, currentUser }) {
       const rendered = await apiRequest(`/templates/${encodeURIComponent(template.filename)}/preview`, {
         method: 'POST',
         userId: currentUser.id,
+        body: { html },
       })
       if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current)
       const blob = new Blob([rendered], { type: 'text/html' })
@@ -3561,6 +3687,7 @@ function TemplateEditorView({ template, onBack, onSave, currentUser }) {
               value={html}
               onChange={(e) => setHtml(e.target.value)}
               spellCheck={false}
+              wrap="off"
             />
           </div>
           <div className="tpl-editor-pane tpl-editor-preview">

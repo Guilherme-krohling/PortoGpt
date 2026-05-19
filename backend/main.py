@@ -3,8 +3,8 @@ import re
 import chromadb
 import ingest
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi import BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
@@ -124,6 +124,13 @@ class ChatSessionRequest(BaseModel):
     title: Optional[str] = None
 
 
+class SaveMessageRequest(BaseModel):
+    user_id: int
+    session_id: Optional[int] = None
+    user_message: str
+    assistant_message: str
+
+
 class AdminUserRequest(BaseModel):
     name: str
     email: str
@@ -160,6 +167,10 @@ class CreateTemplateRequest(BaseModel):
 
 class SaveHtmlRequest(BaseModel):
     html: str
+
+
+class PreviewTemplateRequest(BaseModel):
+    html: Optional[str] = None
 
 
 class ApplyTemplateRequest(BaseModel):
@@ -673,6 +684,18 @@ def delete_chat_session_endpoint(session_id: int, user_id: int):
 
 
 # ========== HISTÓRICO DE CHAT ==========
+@app.post("/api/chat/history")
+def save_chat_history_endpoint(request: SaveMessageRequest):
+    """Salva uma mensagem interativa ou de template no histórico do chat."""
+    save_result = database.salvar_mensagem(
+        request.user_id,
+        request.user_message,
+        request.assistant_message,
+        session_id=request.session_id,
+    )
+    return {"session_id": save_result.get("session_id")}
+
+
 @app.get("/api/chat/history/{user_id}")
 def get_chat_history_endpoint(user_id: int, limite: int = 50):
     """Obtém o histórico de chat do usuário."""
@@ -746,6 +769,126 @@ def resolve_managed_file(root: Path, filename: str):
     return safe_filename, file_path
 
 
+# Variáveis cujo nome indica "corpo/conteúdo completo do documento"
+BODY_VARS = {
+    "corpo", "conteudo", "texto", "body", "content", "documento",
+    "relatorio", "descricao", "texto_completo", "conteudo_completo",
+    "corpo_do_documento", "texto_do_documento",
+}
+
+
+def pdf_text_to_html(text: str) -> str:
+    """Converte texto extraído de PDF em HTML inline (compatível com <p>{{ corpo }}</p>).
+
+    Usa apenas <br> e elementos inline para evitar aninhamento inválido de <p> dentro de <p>.
+    """
+    lines = text.split('\n')
+    html_parts = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if not stripped:
+            i += 1
+            continue
+
+        # Seção numerada: "1. Objetivo", "2. Atividades Executadas"
+        if re.match(r'^\d+\.\s+\S', stripped):
+            if html_parts:
+                html_parts.append('<br>')
+            html_parts.append(f'<strong>{stripped}</strong><br>')
+            i += 1
+            continue
+
+        # Bullets: ●, •, ou "- texto"
+        if stripped[0] in {'●', '•'} or stripped.startswith('- '):
+            bullet_text = stripped.lstrip('●•- ').strip()
+            html_parts.append(f'&nbsp;&nbsp;&#8226;&nbsp;{bullet_text}<br>')
+            i += 1
+            continue
+
+        html_parts.append(f'{stripped}<br>')
+        i += 1
+
+    return ''.join(html_parts).rstrip('<br>') or '(sem conteúdo)'
+
+
+def _apply_template_to_text(source: str, pdf_text: str) -> tuple:
+    """Extrai campos do texto e renderiza o template. Retorna (fields_dict, rendered_html)."""
+    RESERVED = {"page_number", "total_pages", "logo_url"}
+    variables = [
+        v for v in dict.fromkeys(re.findall(r"\{\{\s*(\w+)\s*\}\}", source))
+        if v not in RESERVED
+    ]
+    if not variables:
+        raise ValueError("Template não possui campos variáveis definidos")
+
+    body_variables = [v for v in variables if v.lower() in BODY_VARS]
+    field_variables = [v for v in variables if v.lower() not in BODY_VARS]
+
+    extracted: dict = {}
+
+    # 1. Extrai campos específicos primeiro (via IA)
+    if field_variables:
+        api_key = os.getenv("secret_key")
+        if not api_key:
+            raise ValueError("Chave de API não configurada")
+        fields_list = "\n".join(f"- {v}" for v in field_variables)
+        prompt = (
+            "Você receberá o texto extraído de um PDF e uma lista de campos.\n"
+            "Extraia APENAS os valores específicos de cada campo e retorne um JSON.\n"
+            "Retorne APENAS o JSON, sem explicações.\n\n"
+            f"CAMPOS:\n{fields_list}\n\n"
+            f"TEXTO DO PDF:\n{pdf_text[:6000]}\n\n"
+            "Se um campo não for encontrado, use string vazia."
+        )
+        groq_client = GroqDirect(api_key=api_key)
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
+        extracted.update(json.loads(response.choices[0].message.content))
+
+    # 2. Gera corpo removendo linhas que já são campos (evita repetição)
+    if body_variables:
+        field_values = {v for v in extracted.values() if isinstance(v, str) and v.strip()}
+        clean_lines = []
+        for line in pdf_text.split('\n'):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Pula linha se ela inteira é um valor já extraído
+            if stripped in field_values:
+                continue
+            # Pula padrão "Label: valor" onde valor já foi extraído
+            if any(stripped.endswith(f': {val}') or stripped == val for val in field_values if val):
+                continue
+            clean_lines.append(line)
+        # Remove o bloco de cabeçalho (linhas antes do primeiro conteúdo numerado ou parágrafo longo)
+        body_text = '\n'.join(clean_lines)
+        # Encontra onde começa o conteúdo real (primeira seção numerada ou primeiro parágrafo longo)
+        content_start = 0
+        for idx, line in enumerate(clean_lines):
+            s = line.strip()
+            if re.match(r'^\d+\.\s+\S', s) or (len(s) > 40 and not re.match(r'^\w+:', s)):
+                content_start = idx
+                break
+        body_text = '\n'.join(clean_lines[content_start:])
+        body_html = pdf_text_to_html(body_text)
+        for var in body_variables:
+            extracted[var] = body_html
+
+    extracted.setdefault("page_number", "1")
+    extracted.setdefault("total_pages", "1")
+    extracted.setdefault("logo_url", "")
+
+    env = Environment(loader=BaseLoader())
+    tmpl = env.from_string(source)
+    rendered = tmpl.render(**extracted)
+    return extracted, rendered
+
+
 def process_document_template(raw_path: Path, processed_path: Path) -> Path:
     """Aplica o primeiro template HTML ativo ao PDF e salva o resultado formatado.
 
@@ -766,7 +909,7 @@ def process_document_template(raw_path: Path, processed_path: Path) -> Path:
 
         import pypdf
         reader = pypdf.PdfReader(str(raw_path))
-        pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        pdf_text = "\n".join(page.extract_text(extraction_mode="layout") or "" for page in reader.pages)
 
         template_source = template_path.read_text(encoding="utf-8")
 
@@ -780,30 +923,42 @@ def process_document_template(raw_path: Path, processed_path: Path) -> Path:
             shutil.copyfile(raw_path, processed_path)
             return processed_path
 
-        api_key = os.getenv("secret_key")
-        if not api_key:
-            shutil.copyfile(raw_path, processed_path)
-            return processed_path
+        # Separa variáveis de corpo (conteúdo completo) das de campo (valor específico)
+        body_variables = [v for v in variables if v.lower() in BODY_VARS]
+        field_variables = [v for v in variables if v.lower() not in BODY_VARS]
 
-        fields_list = "\n".join(f"- {v}" for v in variables)
-        prompt = (
-            "Você receberá o texto extraído de um PDF e uma lista de campos de template.\n"
-            "Sua tarefa é extrair os valores correspondentes do texto e retornar um JSON com esses campos preenchidos.\n"
-            "Retorne APENAS o JSON, sem explicações adicionais.\n\n"
-            f"CAMPOS DO TEMPLATE:\n{fields_list}\n\n"
-            f"TEXTO DO PDF:\n{pdf_text[:6000]}\n\n"
-            "Retorne um JSON com os campos acima preenchidos com os valores encontrados no texto.\n"
-            "Se um campo não for encontrado, use uma string vazia."
-        )
+        extracted = {}
 
-        groq_client = GroqDirect(api_key=api_key)
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
-        extracted = json_module.loads(response.choices[0].message.content)
+        # Corpo: preenche diretamente com todo o texto do PDF convertido em HTML
+        body_html = pdf_text_to_html(pdf_text)
+        for var in body_variables:
+            extracted[var] = body_html
+
+        # Campos específicos: usa IA apenas se necessário
+        if field_variables:
+            api_key = os.getenv("secret_key")
+            if not api_key:
+                for var in field_variables:
+                    extracted[var] = ""
+            else:
+                fields_list = "\n".join(f"- {v}" for v in field_variables)
+                prompt = (
+                    "Você receberá o texto extraído de um PDF e uma lista de campos.\n"
+                    "Extraia APENAS os valores específicos de cada campo e retorne um JSON.\n"
+                    "Retorne APENAS o JSON, sem explicações.\n\n"
+                    f"CAMPOS:\n{fields_list}\n\n"
+                    f"TEXTO DO PDF:\n{pdf_text[:6000]}\n\n"
+                    "Se um campo não for encontrado, use string vazia."
+                )
+                groq_client = GroqDirect(api_key=api_key)
+                response = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.1,
+                )
+                extracted.update(json_module.loads(response.choices[0].message.content))
+
         extracted.setdefault("page_number", "1")
         extracted.setdefault("total_pages", "1")
         extracted.setdefault("logo_url", "")
@@ -941,11 +1096,21 @@ def upload_endpoint(
             )
             chat_session_id = save_result.get("session_id")
 
+        # Extrai texto do PDF para uso imediato no chat (aplicar template)
+        pdf_text_for_chat = ""
+        try:
+            import pypdf as _pypdf
+            _reader = _pypdf.PdfReader(str(dest_path))
+            pdf_text_for_chat = "\n".join(page.extract_text(extraction_mode="layout") or "" for page in _reader.pages)
+        except Exception:
+            pass
+
         return {
             "response": response,
             "document": document,
             "formatted_pdf_url": f"/api/submissions/{document['id']}/processed",
             "session_id": chat_session_id,
+            "pdf_text": pdf_text_for_chat,
         }
     except Exception as e:
         print(e)
@@ -1336,13 +1501,16 @@ def save_template_html(filename: str, request: SaveHtmlRequest, admin_user=Depen
 
 
 @app.post("/api/templates/{filename}/preview")
-def preview_template(filename: str, admin_user=Depends(require_admin)):
+def preview_template(filename: str, request: PreviewTemplateRequest = Body(default=PreviewTemplateRequest()), admin_user=Depends(require_admin)):
     """Renderiza o template com valores de exemplo e retorna o HTML resultante."""
-    safe_filename, file_path = resolve_template_file(filename)
-    try:
-        source = file_path.read_text(encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao ler template: {e}")
+    if request.html is not None:
+        source = request.html
+    else:
+        safe_filename, file_path = resolve_template_file(filename)
+        try:
+            source = file_path.read_text(encoding="utf-8")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Erro ao ler template: {e}")
 
     # Extrai todas as variáveis {{ var }} do template
     variables = list(dict.fromkeys(re.findall(r"\{\{\s*(\w+)\s*\}\}", source)))
@@ -1386,51 +1554,111 @@ def apply_template(filename: str, request: ApplyTemplateRequest, current_user=De
     if not variables:
         raise HTTPException(status_code=400, detail="Template não possui campos variáveis definidos")
 
-    # Monta prompt para o LLM extrair os campos do texto do PDF
-    fields_list = "\n".join(f"- {v}" for v in variables)
-    prompt = f"""Você receberá o texto extraído de um PDF e uma lista de campos de template.
-Sua tarefa é extrair os valores correspondentes do texto e retornar um JSON com esses campos preenchidos.
-Retorne APENAS o JSON, sem explicações adicionais.
-
-CAMPOS DO TEMPLATE:
-{fields_list}
-
-TEXTO DO PDF:
-{request.pdf_text[:6000]}
-
-Retorne um JSON com os campos acima preenchidos com os valores encontrados no texto.
-Se um campo não for encontrado, use uma string vazia.
-"""
-
-    api_key = os.getenv("secret_key")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Chave de API não configurada")
-
     try:
-        groq_client = GroqDirect(api_key=api_key)
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
-        extracted = json.loads(response.choices[0].message.content)
+        extracted, rendered = _apply_template_to_text(source, request.pdf_text)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao extrair campos com IA: {e}")
-
-    # Adiciona valores reservados de paginação
-    extracted.setdefault("page_number", "1")
-    extracted.setdefault("total_pages", "1")
-    extracted.setdefault("logo_url", "")
-
-    try:
-        env = Environment(loader=BaseLoader())
-        tmpl = env.from_string(source)
-        rendered = tmpl.render(**extracted)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao renderizar template: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao aplicar template: {e}")
 
     return {"html": rendered, "fields": extracted}
+
+
+@app.post("/api/templates/{filename}/apply-file")
+def apply_template_file(
+    filename: str,
+    file: UploadFile = File(...),
+    _current_user=Depends(require_active_user),
+):
+    """Aplica o template diretamente sobre um arquivo PDF enviado pelo usuário."""
+    safe_filename, file_path = resolve_template_file(filename)
+    try:
+        source = file_path.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler template: {e}")
+
+    try:
+        import pypdf as _pypdf, io as _io
+        file_bytes = file.file.read()
+        reader = _pypdf.PdfReader(_io.BytesIO(file_bytes))
+        pdf_text = "\n".join(page.extract_text(extraction_mode="layout") or "" for page in reader.pages)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Erro ao extrair texto do PDF: {e}")
+
+    try:
+        extracted, rendered = _apply_template_to_text(source, pdf_text)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao aplicar template: {e}")
+
+    return {"html": rendered, "fields": extracted}
+
+
+@app.post("/api/render-pdf")
+def render_pdf_endpoint(
+    html: str = Form(...),
+    filename: str = Form("documento"),
+):
+    """Converte HTML em PDF (xhtml2pdf) e retorna como download.
+
+    Captura exceções do pisa e expõe o motivo real do erro (mensagem + logs)
+    para facilitar diagnóstico no navegador e no terminal do uvicorn.
+    """
+    import io as _io
+    import traceback as _tb
+    from urllib.parse import quote
+
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', filename).strip() or 'documento'
+    encoded_filename = quote(f"{safe}.pdf")
+
+    result_io = _io.BytesIO()
+    try:
+        from xhtml2pdf import pisa
+        pisa_status = pisa.CreatePDF(src=html, dest=result_io, encoding='utf-8')
+    except ModuleNotFoundError as e:
+        print("[render-pdf] Dependência ausente:", repr(e))
+        _tb.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Dependência ausente no servidor: {e.name}. Execute: pip install -r requirements.txt",
+        )
+    except Exception as e:
+        print("[render-pdf] Exceção em pisa.CreatePDF:", repr(e))
+        _tb.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Falha ao gerar PDF (xhtml2pdf): {type(e).__name__}: {e}",
+        )
+
+    if pisa_status.err:
+        log_entries = []
+        for entry in (pisa_status.log or [])[:20]:
+            try:
+                level, msg, line, col = entry[0], entry[1], entry[2], entry[3]
+                log_entries.append(f"[{level}] linha {line}: {msg}")
+            except Exception:
+                log_entries.append(str(entry))
+        log_text = "; ".join(log_entries) or "sem detalhes no log do pisa"
+        print(f"[render-pdf] pisa retornou {pisa_status.err} erro(s): {log_text}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"xhtml2pdf reportou {pisa_status.err} erro(s): {log_text}",
+        )
+
+    pdf_bytes = result_io.getvalue()
+    if not pdf_bytes:
+        print("[render-pdf] pisa não escreveu bytes no buffer apesar de err=0")
+        raise HTTPException(status_code=500, detail="PDF vazio após renderização")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename*=utf-8''{encoded_filename}",
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
 
 
 @app.post("/api/docs/upload")

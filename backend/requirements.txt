@@ -25,6 +25,9 @@ uvicorn
 # Template engine
 jinja2
 
+# Geração de PDF a partir de HTML (server-side)
+xhtml2pdf
+
 # Banco de Dados Vetorial
 chromadb
 llama-index-vector-stores-chroma
