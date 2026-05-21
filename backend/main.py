@@ -15,7 +15,7 @@ import subprocess
 import sys
 import json as json_module
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 from jinja2 import Environment, BaseLoader, Undefined
 from groq import Groq as GroqDirect
 
@@ -129,6 +129,7 @@ class SaveMessageRequest(BaseModel):
     session_id: Optional[int] = None
     user_message: str
     assistant_message: str
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class AdminUserRequest(BaseModel):
@@ -692,6 +693,7 @@ def save_chat_history_endpoint(request: SaveMessageRequest):
         request.user_message,
         request.assistant_message,
         session_id=request.session_id,
+        metadata=request.metadata,
     )
     return {"session_id": save_result.get("session_id")}
 
@@ -1595,60 +1597,93 @@ def apply_template_file(
     return {"html": rendered, "fields": extracted}
 
 
+_PDF_PRINT_CSS = """
+@page { size: A4; margin: 0; }
+html, body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+"""
+
+
+def _prepare_html_for_pdf(html: str) -> str:
+    """Garante que o HTML renderizado pelo Chromium gere um PDF fiel ao iframe.
+
+    - Injeta @page A4 sem margem (o template já controla padding/posicionamento).
+    - Força a preservação das cores de fundo na impressão.
+    - Não altera estrutura do header/footer: o Chromium suporta o CSS original
+      (flexbox, position:fixed, object-fit) exatamente como o iframe da preview.
+    """
+    style_block = f"<style>{_PDF_PRINT_CSS}</style>"
+    if "</head>" in html:
+        return html.replace("</head>", style_block + "</head>", 1)
+    if "<body" in html:
+        return html.replace("<body", style_block + "<body", 1)
+    return style_block + html
+
+
+def _render_pdf_with_chromium(html: str) -> bytes:
+    """Renderiza HTML em PDF usando Chromium headless via Playwright.
+
+    Executa de forma síncrona (o endpoint FastAPI roda em threadpool quando
+    declarado com 'def'), abrindo um navegador efêmero por chamada para evitar
+    estados compartilhados.
+    """
+    from playwright.sync_api import sync_playwright
+
+    prepared = _prepare_html_for_pdf(html)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            context = browser.new_context()
+            page = context.new_page()
+            page.set_content(prepared, wait_until="networkidle")
+            page.emulate_media(media="print")
+            return page.pdf(
+                format="A4",
+                print_background=True,
+                prefer_css_page_size=True,
+                margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
+            )
+        finally:
+            browser.close()
+
+
 @app.post("/api/render-pdf")
 def render_pdf_endpoint(
     html: str = Form(...),
     filename: str = Form("documento"),
 ):
-    """Converte HTML em PDF (xhtml2pdf) e retorna como download.
+    """Converte HTML em PDF usando Chromium headless (Playwright).
 
-    Captura exceções do pisa e expõe o motivo real do erro (mensagem + logs)
-    para facilitar diagnóstico no navegador e no terminal do uvicorn.
+    O Chromium renderiza o HTML exatamente como o iframe de pré-visualização,
+    garantindo paridade visual (flexbox, position:fixed, object-fit, fontes etc).
     """
-    import io as _io
     import traceback as _tb
     from urllib.parse import quote
 
     safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', filename).strip() or 'documento'
     encoded_filename = quote(f"{safe}.pdf")
 
-    result_io = _io.BytesIO()
     try:
-        from xhtml2pdf import pisa
-        pisa_status = pisa.CreatePDF(src=html, dest=result_io, encoding='utf-8')
+        pdf_bytes = _render_pdf_with_chromium(html)
     except ModuleNotFoundError as e:
         print("[render-pdf] Dependência ausente:", repr(e))
         _tb.print_exc()
         raise HTTPException(
             status_code=500,
-            detail=f"Dependência ausente no servidor: {e.name}. Execute: pip install -r requirements.txt",
+            detail=(
+                f"Dependência ausente no servidor: {e.name}. "
+                "Execute: pip install -r requirements.txt && python -m playwright install chromium"
+            ),
         )
     except Exception as e:
-        print("[render-pdf] Exceção em pisa.CreatePDF:", repr(e))
+        print("[render-pdf] Falha ao gerar PDF (Playwright):", repr(e))
         _tb.print_exc()
         raise HTTPException(
             status_code=500,
-            detail=f"Falha ao gerar PDF (xhtml2pdf): {type(e).__name__}: {e}",
+            detail=f"Falha ao gerar PDF (Chromium): {type(e).__name__}: {e}",
         )
 
-    if pisa_status.err:
-        log_entries = []
-        for entry in (pisa_status.log or [])[:20]:
-            try:
-                level, msg, line, col = entry[0], entry[1], entry[2], entry[3]
-                log_entries.append(f"[{level}] linha {line}: {msg}")
-            except Exception:
-                log_entries.append(str(entry))
-        log_text = "; ".join(log_entries) or "sem detalhes no log do pisa"
-        print(f"[render-pdf] pisa retornou {pisa_status.err} erro(s): {log_text}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"xhtml2pdf reportou {pisa_status.err} erro(s): {log_text}",
-        )
-
-    pdf_bytes = result_io.getvalue()
     if not pdf_bytes:
-        print("[render-pdf] pisa não escreveu bytes no buffer apesar de err=0")
+        print("[render-pdf] Chromium retornou buffer vazio")
         raise HTTPException(status_code=500, detail="PDF vazio após renderização")
 
     return Response(

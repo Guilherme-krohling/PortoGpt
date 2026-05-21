@@ -25,7 +25,9 @@ uvicorn
 # Template engine
 jinja2
 
-# Geração de PDF a partir de HTML (server-side)
+# Geração de PDF a partir de HTML (server-side, via Chromium headless)
+# Após instalar, execute: python -m playwright install chromium
+playwright
 xhtml2pdf
 
 # Banco de Dados Vetorial

@@ -213,6 +213,8 @@ def init_db():
     chat_cols = {row[1] for row in cursor.fetchall()}
     if "session_id" not in chat_cols:
         cursor.execute("ALTER TABLE chat_history ADD COLUMN session_id INTEGER")
+    if "metadata" not in chat_cols:
+        cursor.execute("ALTER TABLE chat_history ADD COLUMN metadata TEXT")
 
     cursor.execute("SELECT DISTINCT user_id FROM chat_history WHERE session_id IS NULL")
     legacy_users = [row[0] for row in cursor.fetchall()]
@@ -1608,7 +1610,7 @@ def obter_mensagens_chat_session(user_id: int, session_id: int) -> List[Dict[str
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, message, response, created_at
+            SELECT id, message, response, created_at, metadata
             FROM chat_history
             WHERE user_id = ? AND session_id = ?
             ORDER BY datetime(created_at) ASC, id ASC
@@ -1627,13 +1629,22 @@ def obter_mensagens_chat_session(user_id: int, session_id: int) -> List[Dict[str
                 "text": row[1],
                 "created_at": row[3],
             })
-            messages.append({
+            assistant_msg = {
                 "id": f"{row[0]}-assistant",
                 "chat_id": row[0],
                 "role": "assistant",
                 "text": row[2],
                 "created_at": row[3],
-            })
+            }
+            raw_metadata = row[4] if len(row) > 4 else None
+            if raw_metadata:
+                try:
+                    extras = json.loads(raw_metadata)
+                    if isinstance(extras, dict):
+                        assistant_msg.update(extras)
+                except (ValueError, TypeError):
+                    pass
+            messages.append(assistant_msg)
         return messages
     except Exception as e:
         print(f"Erro ao obter mensagens da conversa: {str(e)}")
@@ -1659,7 +1670,7 @@ def deletar_chat_session(user_id: int, session_id: int) -> Dict[str, Any]:
         return {"success": False, "message": f"Erro ao remover conversa: {str(e)}"}
 
 
-def salvar_mensagem(user_id: int, message: str, response: str, session_id: Optional[int] = None) -> Dict[str, Any]:
+def salvar_mensagem(user_id: int, message: str, response: str, session_id: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Salva uma mensagem e resposta no histórico."""
     try:
         conn = sqlite3.connect(str(DB_PATH))
@@ -1678,11 +1689,12 @@ def salvar_mensagem(user_id: int, message: str, response: str, session_id: Optio
             )
             session_id = cursor.lastrowid
             created_session = True
-        
+
+        metadata_json = json.dumps(metadata) if metadata else None
         cursor.execute(
-            """INSERT INTO chat_history (session_id, user_id, message, response, created_at) 
-               VALUES (?, ?, ?, ?, ?)""",
-            (session_id, user_id, message, response, brasilia_now())
+            """INSERT INTO chat_history (session_id, user_id, message, response, created_at, metadata)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (session_id, user_id, message, response, brasilia_now(), metadata_json)
         )
         chat_id = cursor.lastrowid
 

@@ -923,6 +923,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
         template.title ||
         'documento'
       const assistantText = 'Documento formatado com sucesso! Clique para visualizar.'
+      const templateResult = { html: result.html, title: docName }
       try {
         const saveRes = await apiRequest('/chat/history', {
           method: 'POST',
@@ -931,6 +932,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
             session_id: currentSessionId,
             user_message: `*Aplicou template ${template.title || template.filename} no arquivo ${file.name}*`,
             assistant_message: assistantText,
+            metadata: { templateResult },
           }
         })
         if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
@@ -944,7 +946,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
         {
           role: 'assistant',
           text: assistantText,
-          templateResult: { html: result.html, title: docName },
+          templateResult,
         },
       ])
     } catch (err) {
@@ -2833,26 +2835,38 @@ function TemplateManagementPage({ currentUser }) {
 
   const handleCreateTemplate = async (formData) => {
     const html = generateTemplateHtml(formData)
-    const payload = await apiRequest('/templates/create', {
-      method: 'POST',
-      userId: currentUser.id,
-      body: { name: formData.name, html, description: `${formData.category} criado via formulário` },
-    })
     setCreateModalOpen(false)
-    await loadTemplates()
-    setEditorTemplate({ ...payload.template, html })
+    setEditorTemplate({
+      title: formData.name,
+      description: `${formData.category} criado via formulário`,
+      html,
+      isNew: true,
+    })
   }
 
   const handleSaveHtml = async (html) => {
     if (!editorTemplate) return
     try {
-      await apiRequest(`/templates/${encodeURIComponent(editorTemplate.filename)}/html`, {
-        method: 'PUT',
-        userId: currentUser.id,
-        body: { html },
-      })
+      if (editorTemplate.isNew) {
+        await apiRequest('/templates/create', {
+          method: 'POST',
+          userId: currentUser.id,
+          body: {
+            name: editorTemplate.title,
+            html,
+            description: editorTemplate.description || '',
+          },
+        })
+        setNotice('Template criado com sucesso.')
+      } else {
+        await apiRequest(`/templates/${encodeURIComponent(editorTemplate.filename)}/html`, {
+          method: 'PUT',
+          userId: currentUser.id,
+          body: { html },
+        })
+        setNotice('HTML do template salvo com sucesso.')
+      }
       await loadTemplates()
-      setNotice('HTML do template salvo com sucesso.')
       setEditorTemplate(null)
     } catch (err) {
       setError(err.message)
@@ -3626,6 +3640,10 @@ function TemplateEditorView({ template, onBack, onSave, currentUser }) {
   }
 
   async function compileFromServer() {
+    if (!template.filename) {
+      compileLocal(html)
+      return
+    }
     setCompiling(true)
     try {
       const rendered = await apiRequest(`/templates/${encodeURIComponent(template.filename)}/preview`, {

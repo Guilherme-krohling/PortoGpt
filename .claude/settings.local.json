@@ -25,7 +25,9 @@
       "PowerShell(Start-Process -FilePath \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\" -ArgumentList \"run\",\"dev\" -WorkingDirectory \"D:\\\\projetos\\\\TCC oficial\\\\frontend\" -WindowStyle Hidden -RedirectStandardOutput \"D:\\\\projetos\\\\TCC oficial\\\\frontend\\\\vite.log\" -RedirectStandardError \"D:\\\\projetos\\\\TCC oficial\\\\frontend\\\\vite.err.log\" -PassThru | Select-Object Id, ProcessName)",
       "Bash(curl -s -i -X POST http://127.0.0.1:8000/api/render-pdf -H \"Content-Type: application/x-www-form-urlencoded\" -H \"Origin: http://localhost:5173\" --data-urlencode \"html=<html><body><h1>teste</h1></body></html>\" --data-urlencode \"filename=test\" -o curl_out.bin -w \"HTTP_CODE=%{http_code}\\\\nSIZE=%{size_download}\\\\nTIME=%{time_total}\\\\n\")",
       "Bash(./venv/Scripts/pip.exe install *)",
-      "Bash(curl -s -X POST http://127.0.0.1:8000/api/render-pdf -H \"Content-Type: application/x-www-form-urlencoded\" --data-urlencode \"html=<html><body><h1>teste</h1></body></html>\" --data-urlencode \"filename=test\" -o curl_out.bin -w \"HTTP_CODE=%{http_code} SIZE=%{size_download} TYPE=%{content_type}\\\\n\")"
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/render-pdf -H \"Content-Type: application/x-www-form-urlencoded\" --data-urlencode \"html=<html><body><h1>teste</h1></body></html>\" --data-urlencode \"filename=test\" -o curl_out.bin -w \"HTTP_CODE=%{http_code} SIZE=%{size_download} TYPE=%{content_type}\\\\n\")",
+      "Bash(powershell *)",
+      "PowerShell(& \"d:\\\\projetos\\\\TCC oficial\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" \"d:\\\\projetos\\\\TCC oficial\\\\backend\\\\_test_pdf_render.py\")"
     ]
   }
 }
