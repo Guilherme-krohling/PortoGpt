@@ -1,0 +1,293 @@
+================================================================================
+                     SISTEMA DE TEMPLATES DO PORTOGPT
+================================================================================
+
+1. VISÃO GERAL DA ARQUITETURA
+================================================================================
+O sistema de templates do PortoGpt foi desenhado para resolver um problema comum:
+documentos portuários brutos em PDF costumam ser visualmente feios, desorganizados 
+e difíceis de ler. 
+
+O PortoGpt converte esses PDFs brutos em documentos HTML elegantes, padronizados, 
+com identidade visual corporativa (estilizados com CSS moderno) e extrai dados-chave 
+automaticamente.
+
+O ecossistema é dividido em:
+- FRONTEND (React / SPA): Interface do usuário. Responsável pela criação visual 
+  de templates por formulário, edição de código HTML, renderização de prévias na 
+  tela e interceptação inteligente de comandos no chat.
+- BACKEND (FastAPI / Python): Motor de processamento. Responsável por salvar 
+  os templates no disco, extrair textos de PDFs, chamar modelos de IA para extrair 
+  dados específicos, renderizar templates usando a biblioteca jinja e converter 
+  HTML em PDF físico usando xhtml2pdf.
+- BANCO DE DADOS (SQLite): Armazena os metadados dos templates (caminho do arquivo, 
+  título, descrição, status ativo/inativo, quem criou e data de modificação).
+
+---
+
+2. FLUXO 1: CRIANDO UM TEMPLATE VIA FORMULÁRIO (FRONTEND -> BACKEND)
+================================================================================
+Para facilitar a vida de quem não sabe programar HTML/CSS, o painel administrativo 
+possui um assistente de criação de templates.
+
+A) Escolha de Parâmetros no Frontend:
+   O administrador preenche um formulário informando:
+   - Nome do documento e Categoria (Relatório, Ofício, Memorando, etc.).
+   - Configurações do Cabeçalho: Nome da empresa e imagem da Logomarca (carregada 
+     no navegador e transformada em Base64/DataURL).
+   - Configurações do Rodapé: Posição da logo e tipo de paginação ("Página X", 
+     "Página X de Y" ou "Sem paginação").
+   - Campos Customizados: O usuário clica em "Adicionar Campo" e define Rótulos 
+     (ex: "Número do Processo", "Data de Emissão") e o Tipo de dado (Texto curto, 
+     Parágrafo longo ou Tabela).
+
+B) Geração de Código HTML Automático (Frontend):
+   A função `generateTemplateHtml` do React é executada. Ela:
+   1. Sanitiza os rótulos dos campos adicionados pelo usuário, convertendo-os em 
+      nomes de variáveis em caixa baixa, sem acentos, caracteres especiais ou 
+      espaços (ex: "Data de Emissão" vira a variável `data_de_emissao`).
+   2. Constrói um arquivo HTML5 completo e estruturado.
+   3. Aplica estilos CSS internos embutidos na tag `<style>` (definindo fontes, 
+      cores institucionais, espaçamentos flexíveis com Flexbox, margens, design de 
+      tabelas e posicionamento absoluto do rodapé fixo).
+   4. Insere blocos de variáveis jinja baseados nos tipos de campos:
+      - Para campos de Texto Curto / Parágrafo: Insere `{{ nome_do_campo }}`.
+      - Para campos de Tabela: Insere uma estrutura de controle jinja para loop:
+        ```html
+        <table class="field-table">
+          {% for row in nome_do_campo_rows %}
+          <tr>
+            {% for cell in row %}
+            <td>{{ cell }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </table>
+        ```
+   5. O HTML bruto gerado é enviado via chamada HTTP `POST` para `/api/templates/create`.
+
+C) Persistência no Servidor (Backend):
+   No backend (FastAPI), a rota recebe o nome do template, o HTML gerado e a 
+   descrição:
+   1. Transforma o nome do template em um "slug" seguro (ex: "Ofício de Liberação" 
+      vira `oficio_de_liberacao.html`).
+   2. Se o arquivo já existir, adiciona um sufixo numérico incremental para evitar 
+      sobrescritas acidentais (ex: `oficio_de_liberacao_1.html`).
+   3. Grava o código HTML físico codificado em UTF-8 na pasta `backend/templates/`.
+   4. Registra o template no banco SQLite com a função `registrar_template`, salvando 
+      o tamanho em bytes, data de criação e ativando-o por padrão.
+
+---
+
+3. FLUXO 2: EDIÇÃO MANUAL DO HTML DO TEMPLATE
+================================================================================
+Usuários avançados ou desenvolvedores podem editar o HTML do template diretamente 
+pela interface, tendo controle total do layout e das variáveis.
+
+A) Carregamento do Código:
+   Ao clicar no ícone de código (`</>`), o frontend chama a rota 
+   `GET /api/templates/{filename}/html`.
+   - Se o arquivo físico no servidor for de extensão `.html`, o backend lê o texto 
+     do disco e envia de volta ao editor.
+   - Caso o template tenha sido enviado originalmente por upload em formato PDF ou 
+     outro tipo (não editável), o backend inteligentemente gera um template HTML 
+     padrão estruturado (`DEFAULT_TEMPLATE_HTML`) contendo campos genéricos como 
+     `{{ company_name }}`, `{{ titulo }}` e `{{ conteudo }}` para servir de ponto 
+     de partida.
+
+B) Edição e Salvamento:
+   O desenvolvedor altera as tags HTML, ajusta as regras de CSS no cabeçalho ou 
+   adiciona/remove variáveis jinja (como `{{ cnpj_cliente }}`).
+   Ao salvar, o frontend dispara uma requisição `PUT /api/templates/{filename}/html` 
+   enviando o novo HTML bruto. O backend reescreve o arquivo físico no disco e 
+   atualiza a data de modificação no SQLite.
+
+C) Pré-visualização com Dados Fictícios (Preview):
+   Para que o usuário veja como o design está ficando sem precisar processar um 
+   documento real, o backend disponibiliza o endpoint 
+   `POST /api/templates/{filename}/preview`.
+   - O backend lê o HTML do template (ou o HTML enviado no corpo da requisição).
+   - Usa Expressões Regulares (Regex) para varrer o HTML e encontrar todas as 
+     variáveis declaradas entre chaves duplas `{{ variavel }}`.
+   - Cria um dicionário com dados de exemplo estáticos para variáveis comuns 
+     (como `{"company_name": "Porto S.A.", "titulo": "Exemplo de Título", "page_number": "1"}`).
+   - Para qualquer outra variável personalizada criada pelo desenvolvedor, o 
+     sistema gera um texto substituto automático amigável no formato: `[Nome Do Campo]`.
+   - O backend passa esses dados fictícios para o motor de templates **jinja** do Python, 
+     renderiza e envia o HTML completo pronto na resposta HTTP. O frontend exibe 
+     esse resultado instantaneamente em um iframe de prévia.
+
+---
+
+4. FLUXO 3: COMO O TEMPLATE É APLICADO A UM PDF (PROCESSAMENTO TÉCNICO INTERNO)
+================================================================================
+Esta é a parte mais complexa e robusta do sistema. O PortoGpt não faz uma simples 
+substituição de texto: ele une extração de texto de PDF, Inteligência Artificial 
+(LLM via Groq API) e motor de renderização dinâmico (jinja).
+
+O processamento ocorre de duas maneiras:
+- Fluxo Passivo (Automático): Quando um PDF é enviado no chat ou na tela de PDFs 
+  por um usuário, e existe um template ativo no sistema, o backend chama a função 
+  `process_document_template` de forma transparente.
+- Fluxo Ativo (Manual via Chat): O usuário digita comandos como "formatar no template" 
+  ou "aplicar template", escolhe o template e faz upload do PDF na hora.
+
+Passo a Passo Técnico do Processamento Interno:
+
+PASSO 1: Extração de Texto do PDF
+   O backend utiliza a biblioteca `pypdf` para abrir o arquivo carregado e ler 
+   todas as suas páginas no modo "layout" (`page.extract_text(extraction_mode="layout")`). 
+   Isso garante que tabelas e formatações de colunas de texto originais sejam 
+   lidas na ordem espacial correta.
+
+PASSO 2: Varredura de Variáveis do Template
+   O sistema analisa o arquivo de template HTML ativo e extrai todas as variáveis 
+   `{{ variavel }}` configuradas nele. Ele ignora palavras reservadas do sistema, 
+   como `page_number`, `total_pages` e `logo_url`.
+
+PASSO 3: Divisão das Variáveis por Categoria
+   O backend analisa o nome de cada variável para separá-las em dois grupos:
+   1. Variáveis de Corpo/Conteúdo Principal (`BODY_VARS`):
+      São campos que devem conter todo o texto do documento bruto limpo e formatado. 
+      O sistema identifica esses campos se o nome for um destes: `"corpo"`, 
+      `"conteudo"`, `"texto"`, `"body"`, `"content"`, `"documento"`, `"relatorio"`, 
+      `"descricao"`, `"texto_completo"`, `"conteudo_completo"`, `"corpo_do_documento"`, 
+      `"texto_do_documento"`.
+   2. Variáveis de Campos Específicos (Metadados):
+      Qualquer outra variável customizada (ex: `data_vencimento`, `numero_contrato`, 
+      `nome_navio`, `valor_tarifa`).
+
+PASSO 4: Extração dos Campos Específicos com Inteligência Artificial (Groq API)
+   Se existirem campos específicos no template, o sistema aciona a IA.
+   - Modelo Utilizado: `llama-3.3-70b-versatile` via API da Groq.
+   - Prompt de Extração: O backend constrói uma instrução pedindo que a IA extraia 
+     apenas os valores dos campos solicitados com base nos primeiros 6.000 caracteres 
+     do texto extraído do PDF.
+   - Formato Estrito: O backend configura a API com o parâmetro 
+     `response_format={"type": "json_object"}`. Isso força a IA a responder 
+     EXCLUSIVAMENTE em formato JSON estruturado (ex: `{"nome_navio": "Porto de Santos II", "valor_tarifa": "R$ 15.500,00"}`), 
+     evitando qualquer texto de introdução ou conclusão.
+   - Tratamento de Ausência: Se um campo não for encontrado no PDF, a IA preenche 
+     com uma string vazia `""`.
+
+PASSO 5: Limpeza e Geração do Corpo do Documento (Remoção de Redundâncias)
+   Para evitar que a parte geral do documento repita informações que já foram 
+   colocadas nos cabeçalhos e caixas de metadados da página, o backend limpa o 
+   texto bruto do PDF:
+   - Ele analisa os valores que a IA já extraiu nos campos específicos.
+   - Se uma linha inteira do PDF corresponder exatamente a um valor de campo 
+     extraído, a linha é removida.
+   - Se uma linha contiver o padrão `"Rótulo: Valor"` e esse `"Valor"` já tiver 
+     sido extraído, a linha também é descartada.
+   - O sistema detecta o início real do conteúdo (procura a primeira seção numerada 
+     como "1. Objetivo" ou o primeiro parágrafo longo com mais de 40 caracteres 
+     que não seja um rótulo) e corta os cabeçalhos iniciais repetidos.
+   - Esse texto geral limpo é então passado pela função `pdf_text_to_html`, que o 
+     converte em HTML amigável:
+     - Linhas em branco são removidas.
+     - Seções numeradas (ex: `1. Objetivo`) recebem destaque em negrito (`<strong>1. Objetivo</strong><br>`).
+     - Listas e tópicos começados com marcadores (ex: `●`, `•` ou `-`) são recuados 
+       e convertidos em marcadores padronizados de HTML (`&nbsp;&nbsp;&#8226;&nbsp;`).
+     - As demais linhas ganham quebras de linha `<br>` para manter a estrutura original.
+   - O HTML estruturado resultante é associado à variável de corpo (ex: `{{ conteudo }}`).
+
+PASSO 6: Renderização Final com jinja (Python)
+   Agora que o sistema possui um dicionário Python completo contendo todos os dados:
+   `dados_extraidos = { "nome_navio": "...", "conteudo": "<p>...", "page_number": "1", ... }`
+   
+   O backend inicializa o motor de templates **jinja**:
+   ```python
+   from jinja import Environment, BaseLoader
+   env = Environment(loader=BaseLoader())
+   tmpl = env.from_string(template_source_html)
+   html_renderizado_final = tmpl.render(**dados_extraidos)
+   ```
+   O jinja substitui com extrema velocidade e segurança todas as tags `{{ ... }}` 
+   e estruturas de controle pelo conteúdo dinâmico. 
+   O resultado é um HTML renderizado definitivo, pronto para visualização ou 
+   gravação física no diretório `backend/processed_uploads/`.
+
+---
+
+5. FLUXO 4: APLICAÇÃO DE TEMPLATE VIA CHAT (INTEGRAÇÃO INTELIGENTE)
+================================================================================
+No chat de conversação diária, os colaboradores podem solicitar a aplicação de 
+templates de forma extremamente amigável:
+
+1. **Detecção de Intenção**:
+   O frontend monitora as mensagens digitadas pelo usuário no chat. Se o texto bater 
+   com a expressão regular `TEMPLATE_INTENT_RE` (palavras como `"template"`, 
+   `"aplicar template"`, `"formatar com template"`, etc.), o sistema intercepta 
+   o envio convencional para a IA.
+2. **Exibição dos Templates Ativos**:
+   Em vez de apenas responder texto, o chat renderiza um componente interativo na 
+   tela contendo botões estilizados para cada template ativo no banco.
+3. **Seleção de Arquivo PDF local**:
+   Ao clicar em um dos botões de template (ex: "Relatório de Vistoria"), o frontend 
+   cria dinamicamente um seletor de arquivos invisível no navegador e pede para o 
+   usuário selecionar o arquivo PDF local do seu computador.
+4. **Envio e Processamento**:
+   Assim que o usuário seleciona o PDF, o React cria um objeto `FormData` e envia 
+   o arquivo via requisição `POST` para a rota `/api/templates/{filename}/apply-file`.
+5. **Retorno e Prévia na Tela**:
+   O backend processa o PDF (executando os passos 1 a 6 descritos no capítulo 4) 
+   e retorna o HTML final gerado e as variáveis extraídas. 
+   O chat exibe uma mensagem de sucesso com um belíssimo botão "Visualizar documento formatado". 
+   Ao clicar, a tela exibe o componente `<HtmlDocViewer />` que renderiza o HTML 
+   em alta definição e com o CSS corporativo perfeito na tela do usuário!
+
+---
+
+6. CONVERSÃO DE HTML PARA PDF (GERAÇÃO DE DOCUMENTO OFICIAL)
+================================================================================
+Depois que o documento foi processado e formatado como um belo HTML, os usuários 
+podem precisar dele em formato PDF oficial para imprimir, assinar ou enviar por e-mail.
+
+Para isso, existe a rota `POST /api/render-pdf`:
+1. O frontend envia o código HTML final do documento renderizado via formulário HTTP.
+2. O backend importa a biblioteca Python **xhtml2pdf** (conhecida tecnicamente como Pisa).
+3. O xhtml2pdf lê a estrutura HTML e as regras CSS embutidas, convertendo tudo 
+   em elementos nativos de PDF (linhas, textos, imagens e formatações).
+4. O backend captura quaisquer logs ou erros que ocorram nessa conversão para expor 
+   ao console, facilitando diagnósticos rápidos.
+5. Os bytes do PDF gerado são gravados em um buffer de memória e enviados de volta 
+   para o navegador como resposta HTTP do tipo `application/pdf`, com o cabeçalho 
+   `Content-Disposition: attachment; filename=documento.pdf`.
+6. O navegador do usuário inicia o download do arquivo PDF formatado e perfeito na hora!
+
+---
+
+7. RESUMO VISUAL DO FLUXO TÉCNICO (MAPA OPERACIONAL)
+================================================================================
+
++-----------------------------------------------------------------------------+
+|                                  FRONTEND                                   |
+|                                                                             |
+|  [Criar Template] ---> Configura Cabeçalho/Rodapé/Campos ---> HTML Gerado   |
+|  [Aplicar no Chat] --> Detecta Intent -> Escolhe PDF local -> Envia Arquivo |
++------------------------------------+----------------------------------------+
+                                     |
+                                     | (Requisição HTTP)
+                                     v
++------------------------------------+----------------------------------------+
+|                                  BACKEND                                    |
+|                                                                             |
+|  1. Extração de Texto:                                                      |
+|     [Arquivo PDF] --(pypdf)--> Texto Bruto (Layout)                         |
+|                                                                             |
+|  2. Extração de Metadados via IA:                                           |
+|     Texto PDF + Campos --(API Groq / Llama 3.3)--> JSON com Dados do Campo  |
+|                                                                             |
+|  3. Limpeza e Formatação do Corpo:                                          |
+|     Texto PDF - Linhas Redundantes --(pdf_text_to_html)--> HTML do Corpo    |
+|                                                                             |
+|  4. Renderização Final:                                                     |
+|     HTML do Template + Dicionário de Dados --(jinja)--> HTML Renderizado   |
+|                                                                             |
+|  5. Conversão Física (Download):                                            |
+|     HTML Renderizado --(xhtml2pdf)--> Arquivo PDF Oficial (.pdf)            |
++------------------------------------+----------------------------------------+
+                                     |
+                                     v
+                       [SQLite / Pasta de Templates]
+               (Salva metadados e arquivos HTML originais)

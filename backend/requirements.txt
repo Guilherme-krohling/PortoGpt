@@ -1,6 +1,6 @@
 # Pacotes do LLM e API
 # Usamos == para travar a versão exatamente
-groq==0.11.0
+groq>=1.2.0
 python-dotenv==1.0.1
 
 # Pacotes LlamaIndex
@@ -21,6 +21,14 @@ torch
 #API server
 fastapi
 uvicorn
+
+# Template engine
+jinja2
+
+# Geração de PDF a partir de HTML (server-side, via Chromium headless)
+# Após instalar, execute: python -m playwright install chromium
+playwright
+xhtml2pdf
 
 # Banco de Dados Vetorial
 chromadb

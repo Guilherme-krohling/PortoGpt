@@ -2654,7 +2654,7 @@ button:disabled {
 }
 
 .pdf-toolbar {
-  grid-template-columns: minmax(260px, 1fr) auto;
+  grid-template-columns: minmax(160px, 1fr) auto auto;
 }
 
 .documents-grid {
@@ -3771,4 +3771,372 @@ button:disabled {
   .pdf-toolbar {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Create Template Modal ─────────────────────────── */
+
+.ct-modal {
+  width: min(680px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ct-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ct-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  text-align: left;
+}
+
+.ct-toggle span:first-child {
+  flex: 1;
+}
+
+.ct-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.ct-body {
+  padding: 14px;
+  border-top: 1px solid var(--border);
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.ct-fields-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface-soft);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ct-add-btn {
+  padding: 5px 10px;
+  font-size: 13px;
+  gap: 5px;
+}
+
+.ct-fields-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.ct-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ct-field-index {
+  width: 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.ct-field-label-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ct-field-type-select {
+  width: 130px;
+  flex-shrink: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ct-logo-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ct-logo-picker input[type='file'] {
+  padding: 7px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ct-logo-preview {
+  height: 48px;
+  max-width: 160px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  background: var(--surface);
+}
+
+.ct-company-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ct-company-input {
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── Template Editor (full-screen overlay) ─────────── */
+
+.tpl-editor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.tpl-editor-topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 20px;
+  height: 56px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.tpl-editor-name {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpl-editor-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 0;
+}
+
+.tpl-editor-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tpl-editor-code {
+  border-right: 1px solid var(--border);
+}
+
+.tpl-html-textarea {
+  flex: 1;
+  width: 100%;
+  padding: 16px;
+  border: none;
+  resize: none;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  outline: none;
+}
+
+.tpl-editor-preview {
+  background: var(--surface-soft);
+}
+
+.tpl-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.tpl-preview-iframe {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+/* ── HTML Document Viewer ─────────────────────────── */
+
+.doc-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+}
+
+.doc-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  height: 48px;
+  background: #2c2c2c;
+  border-bottom: 1px solid #444;
+  flex-shrink: 0;
+}
+
+.doc-viewer-title {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e0e0e0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-viewer-zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.doc-viewer-zoom-val {
+  width: 44px;
+  text-align: center;
+  font-size: 13px;
+  color: #ccc;
+  font-variant-numeric: tabular-nums;
+}
+
+.doc-viewer-toolbar .ghost-btn {
+  color: #ccc;
+  border-color: #555;
+}
+
+.doc-viewer-toolbar .ghost-btn:hover {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+.doc-viewer-body {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+.doc-viewer-page-wrap {
+  transition: transform 0.15s ease;
+}
+
+.doc-viewer-iframe {
+  display: block;
+  width: 794px;
+  height: 1123px;
+  border: none;
+  background: #fff;
+  box-shadow: 0 4px 32px rgba(0,0,0,0.6);
+}
+
+/* ── Template selection in chat ───────────────────── */
+
+.template-select-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.template-select-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.template-select-btn:hover:not(:disabled) {
+  background: var(--primary);
+  color: #fff;
+}
+
+.template-select-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.template-result-btn {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
 }

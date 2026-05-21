@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pip install jinja2 --quiet)",
+      "Bash(Get-Process -Name python -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object Id, ProcessName, CommandLine)",
+      "Bash(pkill -f \"uvicorn\")",
+      "Bash(pkill -f \"main:app\")",
+      "Bash(nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload)",
+      "Bash(echo \"PID=$!\")",
+      "Bash(curl -s http://localhost:8000/api/docs)",
+      "Bash(\"/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe\" -c \"import groq; print\\(groq.__version__\\)\")",
+      "Bash(/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe -c ' *)",
+      "Bash(sleep 8 && cat /tmp/backend.log | tail -5)",
+      "Read(//tmp/**)",
+      "Bash(\"/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe\" -m pip show groq httpx)",
+      "Bash(\"/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe\" -m pip install \"groq>=0.13.0\" --quiet)",
+      "Bash(\"/c/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe\" -m pip show groq)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Get-CimInstance *)",
+      "PowerShell(Stop-Process *)",
+      "Bash(./venv/Scripts/python.exe -c \"import main; print\\('main.py importou OK'\\)\")",
+      "PowerShell(Start-Process -FilePath \"D:\\\\projetos\\\\TCC oficial\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" -ArgumentList \"-m\",\"uvicorn\",\"main:app\",\"--reload\" -WorkingDirectory \"D:\\\\projetos\\\\TCC oficial\\\\backend\" -WindowStyle Hidden -RedirectStandardOutput \"D:\\\\projetos\\\\TCC oficial\\\\backend\\\\uvicorn.log\" -RedirectStandardError \"D:\\\\projetos\\\\TCC oficial\\\\backend\\\\uvicorn.err.log\" -PassThru | Select-Object Id, ProcessName)",
+      "PowerShell(Start-Process -FilePath \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\" -ArgumentList \"run\",\"dev\" -WorkingDirectory \"D:\\\\projetos\\\\TCC oficial\\\\frontend\" -WindowStyle Hidden -RedirectStandardOutput \"D:\\\\projetos\\\\TCC oficial\\\\frontend\\\\vite.log\" -RedirectStandardError \"D:\\\\projetos\\\\TCC oficial\\\\frontend\\\\vite.err.log\" -PassThru | Select-Object Id, ProcessName)",
+      "Bash(curl -s -i -X POST http://127.0.0.1:8000/api/render-pdf -H \"Content-Type: application/x-www-form-urlencoded\" -H \"Origin: http://localhost:5173\" --data-urlencode \"html=<html><body><h1>teste</h1></body></html>\" --data-urlencode \"filename=test\" -o curl_out.bin -w \"HTTP_CODE=%{http_code}\\\\nSIZE=%{size_download}\\\\nTIME=%{time_total}\\\\n\")",
+      "Bash(./venv/Scripts/pip.exe install *)",
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/render-pdf -H \"Content-Type: application/x-www-form-urlencoded\" --data-urlencode \"html=<html><body><h1>teste</h1></body></html>\" --data-urlencode \"filename=test\" -o curl_out.bin -w \"HTTP_CODE=%{http_code} SIZE=%{size_download} TYPE=%{content_type}\\\\n\")",
+      "Bash(powershell *)",
+      "PowerShell(& \"d:\\\\projetos\\\\TCC oficial\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" \"d:\\\\projetos\\\\TCC oficial\\\\backend\\\\_test_pdf_render.py\")"
+    ]
+  }
+}

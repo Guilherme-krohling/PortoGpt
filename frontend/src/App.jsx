@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
@@ -7,8 +8,12 @@ import {
   Brain,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronUp,
   Clock,
+  Code2,
   Database,
+  Download,
   Eye,
   FileText,
   FileUp,
@@ -22,6 +27,8 @@ import {
   PanelLeftOpen,
   Pencil,
   Plus,
+  RefreshCw,
+  Save,
   Search,
   Send,
   Shield,
@@ -33,6 +40,8 @@ import {
   UserX,
   Users,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react'
 import './App.css'
 
@@ -91,6 +100,14 @@ const emptyTemplateForm = {
   description: '',
   active: true,
 }
+
+const TEMPLATE_CATEGORIES = ['Relatório', 'Ofício', 'Memorando', 'Declaração', 'Contrato', 'Outro']
+
+const TEMPLATE_FIELD_TYPES = [
+  { value: 'text', label: 'Texto curto' },
+  { value: 'paragraph', label: 'Parágrafo' },
+  { value: 'table', label: 'Tabela' },
+]
 
 const defaultAiSettings = {
   strict_documents_only: true,
@@ -740,6 +757,8 @@ function TopBar({
   )
 }
 
+const TEMPLATE_INTENT_RE = /template|aplicar\s+template|colocar\s+no\s+template|encaixar\s+no\s+template|usar\s+template|formatar\s+com\s+template|gerar\s+com\s+template|quero\s+template/i
+
 function ChatPage({ currentUser, onSessionChange, sessionId }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -748,6 +767,9 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
   const [currentSessionId, setCurrentSessionId] = useState(sessionId || null)
   const [welcomeSuggestions, setWelcomeSuggestions] = useState([])
   const [file, setFile] = useState(null)
+  const [lastUploadedPdfText, setLastUploadedPdfText] = useState('')
+  const [templateViewerHtml, setTemplateViewerHtml] = useState(null)
+  const [templateViewerTitle, setTemplateViewerTitle] = useState('')
   const chatContainerRef = useRef(null)
   const fileInput = useRef(null)
 
@@ -877,9 +899,117 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     }
   }, [messages, loading])
 
+  const applyTemplateWithFile = async (template, file) => {
+    setLoading(true)
+    setMessages((prev) => [...prev, {
+      role: 'assistant',
+      text: `Aplicando o template **${template.title || template.filename}** ao arquivo **${file.name}**…`,
+    }])
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const result = await apiRequest(`/templates/${encodeURIComponent(template.filename)}/apply-file`, {
+        method: 'POST',
+        userId: currentUser.id,
+        body: formData,
+      })
+      // Usa o identificador do documento extraído como nome; fallback para título do template
+      const fields = result.fields || {}
+      const docName =
+        fields.numero_relatorio ||
+        fields.numero ||
+        fields.codigo ||
+        fields.titulo ||
+        template.title ||
+        'documento'
+      const assistantText = 'Documento formatado com sucesso! Clique para visualizar.'
+      const templateResult = { html: result.html, title: docName }
+      try {
+        const saveRes = await apiRequest('/chat/history', {
+          method: 'POST',
+          body: {
+            user_id: currentUser.id,
+            session_id: currentSessionId,
+            user_message: `*Aplicou template ${template.title || template.filename} no arquivo ${file.name}*`,
+            assistant_message: assistantText,
+            metadata: { templateResult },
+          }
+        })
+        if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
+          setCurrentSessionId(saveRes.session_id)
+          onSessionChange?.(saveRes.session_id)
+        }
+      } catch (e) {}
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          text: assistantText,
+          templateResult,
+        },
+      ])
+    } catch (err) {
+      setMessages((prev) => [...prev, { role: 'assistant', text: `Erro ao aplicar template: ${err.message}` }])
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const sendMessage = async (overrideText) => {
     const text = String(overrideText ?? input).trim()
     if (!text || loading || historyLoading) return
+
+    if (TEMPLATE_INTENT_RE.test(text)) {
+      setMessages((prev) => [...prev, { role: 'user', text }])
+      setInput('')
+      setLoading(true)
+      try {
+        const payload = await apiRequest('/templates', { userId: currentUser.id })
+        const activeTemplates = (payload.templates || []).filter((t) => t.active)
+        // Preferir o texto extraído diretamente do PDF enviado; fallback para histórico do chat
+        const pdfContext = lastUploadedPdfText || messages.map((m) => m.text).filter(Boolean).join('\n')
+        if (!activeTemplates.length) {
+          const assistantText = 'Nenhum template ativo cadastrado. Peça ao administrador para criar ou ativar um.'
+          try {
+            const saveRes = await apiRequest('/chat/history', {
+              method: 'POST',
+              body: { user_id: currentUser.id, session_id: currentSessionId, user_message: text, assistant_message: assistantText }
+            })
+            if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
+              setCurrentSessionId(saveRes.session_id)
+              onSessionChange?.(saveRes.session_id)
+            }
+          } catch (e) {}
+          setMessages((prev) => [...prev, { role: 'assistant', text: assistantText }])
+        } else {
+          const assistantText = 'Escolha o template desejado e selecione o PDF a formatar:'
+          try {
+            const saveRes = await apiRequest('/chat/history', {
+              method: 'POST',
+              body: { user_id: currentUser.id, session_id: currentSessionId, user_message: text, assistant_message: assistantText }
+            })
+            if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
+              setCurrentSessionId(saveRes.session_id)
+              onSessionChange?.(saveRes.session_id)
+            }
+          } catch (e) {}
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              text: assistantText,
+              templateSelect: { templates: activeTemplates, pdfContext },
+            },
+          ])
+        }
+      } catch {
+        setMessages((prev) => [...prev, { role: 'assistant', text: 'Não foi possível carregar os templates.' }])
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
 
     setMessages((prev) => [...prev, { role: 'user', text }])
     setInput('')
@@ -946,6 +1076,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
       } else if (data.session_id) {
         onSessionChange?.(data.session_id)
       }
+      if (data.pdf_text) setLastUploadedPdfText(data.pdf_text)
       setMessages((prev) => [...prev, {
         role: 'assistant',
         text: data.response,
@@ -969,6 +1100,13 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
 
   return (
     <>
+      {templateViewerHtml && (
+        <HtmlDocViewer
+          html={templateViewerHtml}
+          title={templateViewerTitle}
+          onClose={() => { setTemplateViewerHtml(null); setTemplateViewerTitle('') }}
+        />
+      )}
       <div className="chat-area" ref={chatContainerRef}>
         {historyLoading ? (
           <div className="welcome-screen loading-history">
@@ -1032,6 +1170,45 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
                     )}
                     {message.previewUrl && (
                       <PdfPreview url={message.previewUrl} label={message.previewLabel || 'Prévia do PDF'} />
+                    )}
+                    {message.templateSelect && (
+                      <div className="template-select-buttons">
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 8px 0' }}>
+                          Clique no template e selecione o PDF a formatar:
+                        </p>
+                        {message.templateSelect.templates.map((tpl) => (
+                          <button
+                            key={tpl.filename}
+                            className="template-select-btn"
+                            disabled={loading}
+                            onClick={() => {
+                              const input = document.createElement('input')
+                              input.type = 'file'
+                              input.accept = '.pdf'
+                              input.onchange = (e) => {
+                                const f = e.target.files?.[0]
+                                if (f) applyTemplateWithFile(tpl, f)
+                              }
+                              input.click()
+                            }}
+                          >
+                            <LayoutTemplate size={15} />
+                            {tpl.title || tpl.filename}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {message.templateResult && (
+                      <button
+                        className="primary-btn template-result-btn"
+                        onClick={() => {
+                          setTemplateViewerHtml(message.templateResult.html)
+                          setTemplateViewerTitle(message.templateResult.title)
+                        }}
+                      >
+                        <Eye size={15} />
+                        Visualizar documento formatado
+                      </button>
                     )}
                   </div>
                 </div>
@@ -2593,6 +2770,8 @@ function TemplateManagementPage({ currentUser }) {
   const [search, setSearch] = useState('')
   const [modalMode, setModalMode] = useState(null)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [editorTemplate, setEditorTemplate] = useState(null)
 
   const loadTemplates = useCallback(async () => {
     setLoading(true)
@@ -2640,6 +2819,58 @@ function TemplateManagementPage({ currentUser }) {
   const closeModal = () => {
     setSelectedTemplate(null)
     setModalMode(null)
+  }
+
+  const openHtmlEditor = async (tpl) => {
+    try {
+      const payload = await apiRequest(`/templates/${encodeURIComponent(tpl.filename)}/html`, {
+        userId: currentUser.id,
+      })
+      setEditorTemplate({ ...tpl, html: payload.html })
+    } catch {
+      // Arquivo novo ainda não existe no servidor — usa HTML gerado localmente
+      setEditorTemplate({ ...tpl, html: tpl._html || generateDefaultHtml(tpl) })
+    }
+  }
+
+  const handleCreateTemplate = async (formData) => {
+    const html = generateTemplateHtml(formData)
+    setCreateModalOpen(false)
+    setEditorTemplate({
+      title: formData.name,
+      description: `${formData.category} criado via formulário`,
+      html,
+      isNew: true,
+    })
+  }
+
+  const handleSaveHtml = async (html) => {
+    if (!editorTemplate) return
+    try {
+      if (editorTemplate.isNew) {
+        await apiRequest('/templates/create', {
+          method: 'POST',
+          userId: currentUser.id,
+          body: {
+            name: editorTemplate.title,
+            html,
+            description: editorTemplate.description || '',
+          },
+        })
+        setNotice('Template criado com sucesso.')
+      } else {
+        await apiRequest(`/templates/${encodeURIComponent(editorTemplate.filename)}/html`, {
+          method: 'PUT',
+          userId: currentUser.id,
+          body: { html },
+        })
+        setNotice('HTML do template salvo com sucesso.')
+      }
+      await loadTemplates()
+      setEditorTemplate(null)
+    } catch (err) {
+      setError(err.message)
+    }
   }
 
   const uploadTemplate = async (formData) => {
@@ -2761,6 +2992,10 @@ function TemplateManagementPage({ currentUser }) {
           <Database size={17} />
           Atualizar lista
         </button>
+        <button className="primary-btn" onClick={() => setCreateModalOpen(true)}>
+          <Plus size={17} />
+          Criar template
+        </button>
       </div>
 
       {error && (
@@ -2802,7 +3037,10 @@ function TemplateManagementPage({ currentUser }) {
               </div>
 
               <div className="document-actions">
-                <button className="icon-btn small" onClick={() => openEditModal(tpl)} aria-label="Editar template">
+                <button className="icon-btn small" onClick={() => openHtmlEditor(tpl)} aria-label="Editar HTML do template" title="Editar HTML">
+                  <Code2 size={16} />
+                </button>
+                <button className="icon-btn small" onClick={() => openEditModal(tpl)} aria-label="Editar template" title="Editar metadados">
                   <Pencil size={16} />
                 </button>
                 <button className="icon-btn small" onClick={() => toggleTemplate(tpl)} aria-label={tpl.active ? 'Desativar template' : 'Ativar template'}>
@@ -2822,6 +3060,22 @@ function TemplateManagementPage({ currentUser }) {
           initialTemplate={selectedTemplate}
           onClose={closeModal}
           onSave={modalMode === 'upload' ? uploadTemplate : updateTemplate}
+        />
+      )}
+
+      {createModalOpen && (
+        <CreateTemplateModal
+          onClose={() => setCreateModalOpen(false)}
+          onCreate={handleCreateTemplate}
+        />
+      )}
+
+      {editorTemplate && (
+        <TemplateEditorView
+          template={editorTemplate}
+          onBack={() => setEditorTemplate(null)}
+          onSave={handleSaveHtml}
+          currentUser={currentUser}
         />
       )}
     </div>
@@ -2928,6 +3182,544 @@ function TemplateModal({ initialTemplate, mode, onClose, onSave }) {
         </div>
       </form>
     </div>
+  )
+}
+
+function generateDefaultHtml(tpl) {
+  const title = tpl.title || tpl.filename?.replace(/\.[^.]+$/, '') || 'Template'
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; }
+    header { display: flex; align-items: center; padding: 18px 40px; border-bottom: 2px solid #0b4fd8; position: relative; }
+    .logo-ph { height: 48px; width: 80px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 10pt; border-radius: 4px; flex-shrink: 0; }
+    .company { position: absolute; left: 0; right: 0; text-align: center; font-size: 18pt; font-weight: 700; color: #0b4fd8; pointer-events: none; }
+    .doc-title { text-align: center; padding: 28px 40px 12px; font-size: 16pt; font-weight: 700; }
+    main { padding: 0 40px 40px; }
+    .field { margin-bottom: 22px; }
+    .field-label { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #0b4fd8; margin-bottom: 6px; }
+    .field-value { font-size: 11pt; color: #333; line-height: 1.6; }
+    footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 40px; border-top: 1px solid #ddd; }
+    .footer-ph { height: 28px; width: 48px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-size: 8pt; border-radius: 3px; }
+    .page-num { font-size: 9pt; color: #888; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo-ph">LOGO</div>
+    <span class="company">{{ company_name }}</span>
+  </header>
+
+  <h1 class="doc-title">${title}</h1>
+
+  <main>
+    <section class="field">
+      <h3 class="field-label">Campo 1</h3>
+      <span class="field-value">{{ campo_1 }}</span>
+    </section>
+
+    <section class="field">
+      <h3 class="field-label">Conteúdo</h3>
+      <p class="field-value">{{ conteudo }}</p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-ph">LOGO</div>
+    <span class="page-num">Página {{ page_number }} de {{ total_pages }}</span>
+  </footer>
+</body>
+</html>`
+}
+
+function generateTemplateHtml({ name, category, header, footer, fields }) {
+  const makeVar = (label) =>
+    label
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/\s+/g, '_')
+      .replace(/[^a-z0-9_]/g, '') || 'campo'
+
+  const fieldHtml = fields
+    .map((f) => {
+      const v = makeVar(f.label)
+      const val =
+        f.type === 'paragraph'
+          ? `<div class="field-value">{{ ${v} }}</div>`
+          : f.type === 'table'
+          ? `<table class="field-table">\n        {% for row in ${v}_rows %}\n        <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>\n        {% endfor %}\n      </table>`
+          : `<span class="field-value">{{ ${v} }}</span>`
+      return `    <section class="field">\n      <h3 class="field-label">${f.label || 'Campo'}</h3>\n      ${val}\n    </section>`
+    })
+    .join('\n\n')
+
+  const logoSrc = header.logoDataUrl || null
+  const logoHtml = logoSrc
+    ? `<img src="${logoSrc}" class="header-logo" alt="Logo" />`
+    : `<div class="logo-ph">LOGO</div>`
+
+  const footerLogoHtml =
+    footer.logoPosition !== 'none'
+      ? logoSrc
+        ? `<img src="${logoSrc}" class="footer-logo" alt="Logo" />`
+        : `<div class="footer-ph">LOGO</div>`
+      : ''
+
+  const pageHtml =
+    footer.pagination === 'Sem paginação'
+      ? ''
+      : footer.pagination === 'Página X de Y'
+      ? `<span class="page-num">Página {{ page_number }} de {{ total_pages }}</span>`
+      : `<span class="page-num">Página {{ page_number }}</span>`
+
+  const footerJustify = footer.logoPosition === 'right' ? 'flex-end' : 'space-between'
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; min-height: 100vh; display: flex; flex-direction: column; padding-bottom: 64px; }
+    header { display: flex; align-items: center; padding: 18px 40px; border-bottom: 2px solid #0b4fd8; position: relative; }
+    .header-logo { height: 48px; max-width: 120px; object-fit: contain; }
+    .logo-ph { height: 48px; width: 80px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 10pt; border-radius: 4px; flex-shrink: 0; }
+    .company { position: absolute; left: 0; right: 0; text-align: center; font-size: 18pt; font-weight: 700; color: #0b4fd8; pointer-events: none; }
+    .doc-title { text-align: center; padding: 28px 40px 12px; font-size: 16pt; font-weight: 700; }
+    .doc-category { text-align: center; font-size: 10pt; color: #666; margin-bottom: 28px; }
+    main { flex: 1; padding: 0 40px 40px; }
+    .field { margin-bottom: 22px; }
+    .field-label { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #0b4fd8; margin-bottom: 6px; }
+    .field-value { font-size: 11pt; color: #333; line-height: 1.6; }
+    .field-table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+    .field-table td { border: 1px solid #ddd; padding: 6px 10px; }
+    footer { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: ${footerJustify}; padding: 12px 40px; border-top: 1px solid #ddd; background: #fff; z-index: 10; }
+    .footer-logo { height: 32px; max-width: 80px; object-fit: contain; }
+    .footer-ph { height: 32px; width: 56px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-size: 8pt; border-radius: 3px; }
+    .page-num { font-size: 9pt; color: #888; }
+  </style>
+</head>
+<body>
+  <header>
+    ${logoHtml}
+    <span class="company">${header.companyName || '{{ company_name }}'}</span>
+  </header>
+
+  <h1 class="doc-title">${name || '{{ titulo }}'}</h1>
+  <p class="doc-category">${category}</p>
+
+  <main>
+${fieldHtml}
+  </main>
+
+  <footer>
+    ${footer.logoPosition !== 'right' ? footerLogoHtml : ''}
+    ${pageHtml}
+    ${footer.logoPosition === 'right' ? footerLogoHtml : ''}
+  </footer>
+</body>
+</html>`
+}
+
+function CreateTemplateModal({ onClose, onCreate }) {
+  const [name, setName] = useState('')
+  const [category, setCategory] = useState('Relatório')
+  const [headerOpen, setHeaderOpen] = useState(true)
+  const [footerOpen, setFooterOpen] = useState(true)
+  const [headerData, setHeaderData] = useState({ logoDataUrl: '', companyName: 'Nome da Empresa' })
+  const [footerData, setFooterData] = useState({ pagination: 'Página X de Y', logoPosition: 'left' })
+  const [fields, setFields] = useState([
+    { id: 1, label: 'Título', type: 'text' },
+    { id: 2, label: 'Conteúdo', type: 'paragraph' },
+  ])
+  const [nextId, setNextId] = useState(3)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+
+  const addField = () => {
+    setFields((prev) => [...prev, { id: nextId, label: '', type: 'text' }])
+    setNextId((prev) => prev + 1)
+  }
+
+  const removeField = (id) => setFields((prev) => prev.filter((f) => f.id !== id))
+
+  const updateFieldProp = (id, key, val) =>
+    setFields((prev) => prev.map((f) => (f.id === id ? { ...f, [key]: val } : f)))
+
+  const handleLogoChange = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => setHeaderData((h) => ({ ...h, logoDataUrl: ev.target.result }))
+    reader.readAsDataURL(file)
+  }
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    setSubmitting(true)
+    setSubmitError('')
+    try {
+      await onCreate({ name: name.trim(), category, header: headerData, footer: footerData, fields })
+    } catch (err) {
+      setSubmitError(err.message || 'Erro ao criar template. Verifique se o servidor está ativo.')
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="overlay" role="dialog" aria-modal="true">
+      <form className="modal ct-modal" onSubmit={submit}>
+        <button className="modal-close" type="button" onClick={onClose} aria-label="Fechar">
+          <X size={18} />
+        </button>
+        <h2>Criar template</h2>
+
+        <div className="modal-grid">
+          <label>
+            Nome do template
+            <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="Ex: Relatório Mensal" />
+          </label>
+          <label>
+            Categoria
+            <select value={category} onChange={(e) => setCategory(e.target.value)}>
+              {TEMPLATE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="ct-section">
+          <button type="button" className="ct-toggle" onClick={() => setHeaderOpen((o) => !o)}>
+            <span>Cabeçalho</span>
+            <span className="ct-hint">pré-preenchido · editável</span>
+            {headerOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          </button>
+          {headerOpen && (
+            <div className="ct-body">
+              <label className="ct-logo-picker">
+                Logo da empresa (PNG, JPG, SVG)
+                <input type="file" accept="image/*" onChange={handleLogoChange} />
+                {headerData.logoDataUrl && (
+                  <img src={headerData.logoDataUrl} alt="Logo preview" className="ct-logo-preview" />
+                )}
+              </label>
+              <label className="ct-company-label">
+                Nome da empresa
+                <input
+                  className="ct-company-input"
+                  value={headerData.companyName}
+                  onChange={(e) => setHeaderData((h) => ({ ...h, companyName: e.target.value }))}
+                />
+              </label>
+            </div>
+          )}
+        </div>
+
+        <div className="ct-section">
+          <div className="ct-fields-header">
+            <span>Campos do documento</span>
+            <button type="button" className="ghost-btn ct-add-btn" onClick={addField}>
+              <Plus size={14} />
+              Adicionar campo
+            </button>
+          </div>
+          <div className="ct-fields-list">
+            {fields.map((f, i) => (
+              <div key={f.id} className="ct-field-row">
+                <span className="ct-field-index">{i + 1}</span>
+                <input
+                  className="ct-field-label-input"
+                  value={f.label}
+                  onChange={(e) => updateFieldProp(f.id, 'label', e.target.value)}
+                  placeholder="Rótulo (ex: Destinatário)"
+                />
+                <select
+                  className="ct-field-type-select"
+                  value={f.type}
+                  onChange={(e) => updateFieldProp(f.id, 'type', e.target.value)}
+                >
+                  {TEMPLATE_FIELD_TYPES.map((ft) => (
+                    <option key={ft.value} value={ft.value}>
+                      {ft.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="icon-btn small danger"
+                  onClick={() => removeField(f.id)}
+                  disabled={fields.length === 1}
+                  aria-label="Remover campo"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="ct-section">
+          <button type="button" className="ct-toggle" onClick={() => setFooterOpen((o) => !o)}>
+            <span>Rodapé</span>
+            <span className="ct-hint">pré-preenchido · editável</span>
+            {footerOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          </button>
+          {footerOpen && (
+            <div className="ct-body modal-grid">
+              <label>
+                Paginação
+                <select value={footerData.pagination} onChange={(e) => setFooterData((f) => ({ ...f, pagination: e.target.value }))}>
+                  <option>Página X de Y</option>
+                  <option>Página X</option>
+                  <option>Sem paginação</option>
+                </select>
+              </label>
+              <label>
+                Logo no rodapé
+                <select value={footerData.logoPosition} onChange={(e) => setFooterData((f) => ({ ...f, logoPosition: e.target.value }))}>
+                  <option value="left">Esquerda</option>
+                  <option value="right">Direita</option>
+                  <option value="none">Sem logo</option>
+                </select>
+              </label>
+            </div>
+          )}
+        </div>
+
+        {submitError && (
+          <div className="form-alert">
+            <AlertCircle size={16} />
+            {submitError}
+          </div>
+        )}
+
+        <div className="confirm-row">
+          <button className="ghost-btn" type="button" onClick={onClose} disabled={submitting}>
+            Cancelar
+          </button>
+          <button className="primary-btn" type="submit" disabled={submitting}>
+            <Check size={16} />
+            {submitting ? 'Salvando...' : 'Criar e abrir editor'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function HtmlDocViewer({ html, title, onClose }) {
+  const [zoom, setZoom] = useState(100)
+  const iframeRef = useRef(null)
+
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState(null)
+
+  const handleDownloadPdf = async () => {
+    setDownloading(true)
+    setDownloadError(null)
+    const safeName =
+      String(title || 'documento')
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+        .trim() || 'documento'
+
+    try {
+      const body = new URLSearchParams()
+      body.append('html', html)
+      body.append('filename', safeName)
+
+      const res = await fetch(`${API_BASE}/render-pdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      })
+
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`
+        try {
+          const payload = await res.json()
+          if (payload?.detail) detail = payload.detail
+        } catch {
+          try {
+            const txt = await res.text()
+            if (txt) detail = txt
+          } catch {}
+        }
+        throw new Error(detail)
+      }
+
+      const blob = await res.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = `${safeName}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+    } catch (err) {
+      console.error('[render-pdf] download falhou:', err)
+      setDownloadError(err.message || 'Erro desconhecido ao gerar PDF')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return createPortal(
+    <div className="doc-viewer-overlay">
+      <div className="doc-viewer-toolbar">
+        <button className="ghost-btn doc-viewer-close" onClick={onClose} title="Fechar">
+          <X size={18} />
+          Fechar
+        </button>
+        <span className="doc-viewer-title">{title}</span>
+        <div className="doc-viewer-zoom">
+          <button className="ghost-btn" onClick={() => setZoom((z) => Math.max(40, z - 10))} title="Reduzir zoom">
+            <ZoomOut size={16} />
+          </button>
+          <span className="doc-viewer-zoom-val">{zoom}%</span>
+          <button className="ghost-btn" onClick={() => setZoom((z) => Math.min(200, z + 10))} title="Aumentar zoom">
+            <ZoomIn size={16} />
+          </button>
+        </div>
+        <button className="ghost-btn" onClick={handleDownloadPdf} disabled={downloading} title="Baixar como PDF">
+          <Download size={16} />
+          {downloading ? 'Gerando PDF…' : 'Baixar PDF'}
+        </button>
+      </div>
+      {downloadError && (
+        <div
+          className="form-alert"
+          style={{ margin: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}
+          role="alert"
+        >
+          <AlertCircle size={16} />
+          <span style={{ flex: 1 }}>{downloadError}</span>
+          <button className="ghost-btn" onClick={() => setDownloadError(null)} title="Fechar aviso">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+      <div className="doc-viewer-body">
+        <div className="doc-viewer-page-wrap" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center' }}>
+          <iframe
+            ref={iframeRef}
+            srcDoc={html}
+            className="doc-viewer-iframe"
+            title={title}
+            sandbox="allow-same-origin allow-scripts allow-modals"
+          />
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function TemplateEditorView({ template, onBack, onSave, currentUser }) {
+  const [html, setHtml] = useState(template.html)
+  const [previewSrc, setPreviewSrc] = useState('')
+  const [compiling, setCompiling] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [viewerHtml, setViewerHtml] = useState(null)
+  const prevBlobUrl = useRef(null)
+
+  function compileLocal(source) {
+    if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current)
+    const blob = new Blob([source], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    prevBlobUrl.current = url
+    setPreviewSrc(url)
+  }
+
+  async function compileFromServer() {
+    if (!template.filename) {
+      compileLocal(html)
+      return
+    }
+    setCompiling(true)
+    try {
+      const rendered = await apiRequest(`/templates/${encodeURIComponent(template.filename)}/preview`, {
+        method: 'POST',
+        userId: currentUser.id,
+        body: { html },
+      })
+      if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current)
+      const blob = new Blob([rendered], { type: 'text/html' })
+      const url = URL.createObjectURL(blob)
+      prevBlobUrl.current = url
+      setPreviewSrc(url)
+    } catch {
+      compileLocal(html)
+    } finally {
+      setCompiling(false)
+    }
+  }
+
+  useEffect(() => {
+    compileLocal(template.html)
+    return () => {
+      if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSave = async () => {
+    setSaving(true)
+    await onSave(html)
+    setSaving(false)
+  }
+
+  return (
+    <>
+      {viewerHtml && (
+        <HtmlDocViewer html={viewerHtml} title={template.title} onClose={() => setViewerHtml(null)} />
+      )}
+      <div className="tpl-editor-overlay">
+        <div className="tpl-editor-topbar">
+          <button className="ghost-btn" onClick={onBack}>
+            <ChevronLeft size={17} />
+            Voltar
+          </button>
+          <span className="tpl-editor-name">{template.title}</span>
+          <button className="ghost-btn" onClick={() => setViewerHtml(html)} title="Visualizar como documento">
+            <Eye size={16} />
+            Visualizar
+          </button>
+          <button className="primary-btn" onClick={handleSave} disabled={saving}>
+            <Save size={16} />
+            {saving ? 'Salvando...' : 'Salvar template'}
+          </button>
+        </div>
+
+        <div className="tpl-editor-body">
+          <div className="tpl-editor-pane tpl-editor-code">
+            <textarea
+              className="tpl-html-textarea"
+              value={html}
+              onChange={(e) => setHtml(e.target.value)}
+              spellCheck={false}
+              wrap="off"
+            />
+          </div>
+          <div className="tpl-editor-pane tpl-editor-preview">
+            <div className="tpl-preview-bar">
+              <button className="ghost-btn" onClick={compileFromServer} disabled={compiling}>
+                <RefreshCw size={15} className={compiling ? 'spin' : ''} />
+                {compiling ? 'Compilando...' : 'Recompilar'}
+              </button>
+            </div>
+            <iframe src={previewSrc} className="tpl-preview-iframe" title="Preview do template" />
+          </div>
+        </div>
+      </div>
+    </>
   )
 }
 
@@ -3302,7 +4094,6 @@ function RejectReasonModal({ onClose, onConfirm, submission }) {
 }
 
 function PdfPreview({ label, url }) {
-  const previewUrl = `${url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`
   return (
     <div className="pdf-preview">
       <div className="pdf-preview-head">
@@ -3313,13 +4104,7 @@ function PdfPreview({ label, url }) {
           Abrir em nova aba
         </a>
       </div>
-      <object data={previewUrl} type="application/pdf" title={label}>
-        <div className="pdf-preview-fallback">
-          <FileText size={28} />
-          <strong>Prévia pronta</strong>
-          <span>Abra em nova aba para visualizar ou baixar o PDF formatado.</span>
-        </div>
-      </object>
+      <iframe src={url} title={label} className="pdf-preview-iframe" />
     </div>
   )
 }
