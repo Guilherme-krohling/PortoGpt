@@ -1015,19 +1015,18 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     setLoading(true)
 
     try {
-      let assistantIndex = -1
-      setMessages((prev) => {
-        assistantIndex = prev.length
-        return [...prev, { role: 'assistant', text: '' }]
-      })
-
       const data = await apiStreamChat(
         { query: text, user_id: currentUser.id, session_id: currentSessionId },
         (chunk) => {
-          setMessages((prev) =>
-            prev.map((message, index) =>
-              index === assistantIndex ? { ...message, text: `${message.text}${chunk}` } : message,
-            ),
+          setMessages((prev) => {
+              const lastMessage = prev[prev.length - 1];
+              if (!lastMessage || lastMessage.role !== 'assistant') {
+                return [...prev, { role: 'assistant', text: chunk }];
+              }
+              return prev.map((message, index) =>
+                index === prev.length - 1 ? { ...message, text: `${message.text}${chunk}` } : message,
+              )
+            }
           )
         },
       )
@@ -1216,7 +1215,11 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
             {loading && messages[messages.length - 1]?.role !== 'assistant' && (
               <div className="message-row assistant">
                 <div className="message-content">
-                  <div className="message-text loading-text">Pensando...</div>
+                  <div className="message-text loading-text">
+                    <span>.</span>
+                    <span>.</span>
+                    <span>.</span>
+                  </div>
                 </div>
               </div>
             )}

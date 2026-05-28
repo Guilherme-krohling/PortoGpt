@@ -1671,8 +1671,38 @@ button:disabled {
 }
 
 .loading-text {
-  color: var(--faint);
-  font-style: italic;
+  color: #326ce0;
+  font-size: 3rem;
+  backdrop-filter: none;
+}
+
+.loading-text span {
+  display: inline-block;
+  animation: typing-dots 1.4s infinite both;
+}
+
+.loading-text span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.loading-text span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loading-text span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-dots {
+  0%, 80%, 100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    color: #c65aa8;
+    transform: translateY(-4px);
+  }
 }
 
 .input-container {
