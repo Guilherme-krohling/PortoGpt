@@ -527,12 +527,14 @@ function ChatSidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
+        
         <button
           className="brand-lockup brand-button"
           onClick={onToggleCollapsed}
           aria-label={collapsed ? 'Abrir barra lateral' : 'Fechar barra lateral'}
           title={collapsed ? 'Abrir barra lateral' : 'Fechar barra lateral'}
         >
+          {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           <span className="brand-copy">
             <strong>PortoGPT</strong>
           </span>
@@ -554,10 +556,7 @@ function ChatSidebar({
             <span>{item.label}</span>
           </button>
         ))}
-
-        <button className="sidebar-close-btn" onClick={onToggleCollapsed} aria-label="Fechar barra lateral" title="Fechar barra lateral">
-          <PanelLeftClose size={18} />
-        </button>
+        
       </div>
 
       {searchOpen && (

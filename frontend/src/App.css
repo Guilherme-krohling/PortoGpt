@@ -259,13 +259,10 @@ textarea:focus-visible {
   flex: 0 0 auto;
 }
 
+.sidebar-top .brand-button,
 .sidebar-top .new-chat-btn,
 .sidebar-top .search-chat-btn {
   grid-column: 1 / -1;
-}
-
-.sidebar-top .brand-button {
-  grid-column: 1;
 }
 
 .sidebar-top .sidebar-close-btn {
@@ -280,7 +277,7 @@ textarea:focus-visible {
 }
 
 .sidebar .brand-lockup {
-  padding: 8px 4px;
+  padding: 0 12px;
 }
 
 .brand-lockup strong,
