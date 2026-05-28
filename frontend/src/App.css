@@ -75,6 +75,10 @@ textarea {
   font: inherit;
 }
 
+label > select {
+    margin: 1em;
+}
+
 button {
   border: 0;
 }
@@ -3787,7 +3791,6 @@ button:disabled {
 .ct-section {
   border: 1px solid var(--border);
   border-radius: 8px;
-  overflow: hidden;
 }
 
 .ct-toggle {
@@ -3845,7 +3848,7 @@ button:disabled {
   gap: 6px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
-  max-height: 240px;
+  max-height: 170px;
   overflow-y: auto;
 }
 
