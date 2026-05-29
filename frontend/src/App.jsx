@@ -1091,7 +1091,6 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
   }
 
   const closeUploadModal = () => {
-    setShowUploadModal(false)
     setFile(null)
     if (fileInput.current) fileInput.current.value = ''
   }
