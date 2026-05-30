@@ -986,7 +986,8 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
           try {
             const saveRes = await apiRequest('/chat/history', {
               method: 'POST',
-              body: { user_id: currentUser.id, session_id: currentSessionId, user_message: text, assistant_message: assistantText }
+              body: { user_id: currentUser.id, session_id: currentSessionId, user_message: text, 
+                assistant_message: assistantText, metadata: {templateSelect: { templates: activeTemplates, pdfContext }} }
             })
             if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
               setCurrentSessionId(saveRes.session_id)
