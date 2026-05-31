@@ -202,6 +202,7 @@ function App() {
   const handleLogout = () => {
     localStorage.removeItem(USER_STORAGE_KEY)
     setCurrentUser(null)
+    setActiveSessionId(null)
     navigate('/login', true)
   }
 
