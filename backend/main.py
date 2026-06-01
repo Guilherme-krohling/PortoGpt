@@ -1,9 +1,6 @@
 import os
 import re
-import chromadb
 import ingest
-import processamento_template
-import processamento_dados
 from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -318,6 +315,7 @@ def rebuild_index(file_paths=None):
 
         if Settings.llm is not None and Settings.embed_model is not None:
             carregar_chat_engine()
+        print("✅ ARQUIVOS REINDEXADOS")
     except Exception as e:
         print(f"Erro ao reconstruir índice: {e}")
 
@@ -1024,7 +1022,6 @@ def upload_endpoint(
     file: UploadFile = File(...),
     message: Optional[str] = Form(default=None),
     session_id: Optional[int] = Form(default=None),
-    background_tasks: BackgroundTasks = None,
     x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
 ):
     try:
@@ -1075,13 +1072,9 @@ def upload_endpoint(
             database.registrar_evento_documento(document["id"], "enviado", "pendente", "Documento enviado pelo chat e encaminhado para aprovação.", user["id"])
             database.registrar_evento_documento(document["id"], "processado", "pendente", "Previa formatada gerada pela etapa de templatização.", user["id"])
 
-        # Reindex apenas o arquivo enviado — agendado em background para não bloquear
         if is_auto_approved:
             try:
-                if background_tasks is not None:
-                    background_tasks.add_task(rebuild_index, file_paths=[str(dest_path)])
-                else:
-                    rebuild_index(file_paths=[str(dest_path)])
+                rebuild_index(file_paths=[str(dest_path)])
             except Exception as e:
                 print('Erro ao agendar reindex:', e)
         response = (
@@ -1201,7 +1194,7 @@ def view_processed_submission(document_id: int, user_id: Optional[int] = None, x
 def approve_submission(document_id: int, background_tasks: BackgroundTasks = None, admin_user=Depends(require_admin)):
     doc = database.obter_documento_por_id(document_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+        raise HTTPException(status_code=404, detail="Documento não encontrado")
     _, processed_path = resolve_managed_file(PROCESSED_UPLOADS_DIR, doc.get("processed_filename") or doc["filename"])
     dest_path = DATA_DIR / doc["filename"]
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -1287,10 +1280,13 @@ def notifications(current_user=Depends(require_active_user)):
         unread_docs = database.filtrar_notificacoes_nao_lidas(current_user["id"], docs)
         return {"pending_documents": len(unread_docs), "items": unread_docs}
 
-    docs = [
-        doc for doc in database.listar_documentos(uploaded_by=current_user["id"])
-        if doc.get("status") in {"aprovado", "reprovado"}
-    ]
+    docs = []
+    for doc in database.listar_documentos(uploaded_by=current_user["id"]):
+        if doc.get("status") == "reprovado":
+            docs.append(doc)
+        elif doc.get("status") == "aprovado" and ingest.is_indexed_file(doc.get("filename")):
+            docs.append(doc)
+
     docs.sort(key=lambda doc: doc.get("updated_at") or doc.get("created_at") or "", reverse=True)
     docs = database.filtrar_notificacoes_nao_lidas(current_user["id"], docs)
     return {"pending_documents": 0, "items": docs}

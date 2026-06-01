@@ -78,3 +78,4 @@ saida_teste.html
 # AGENTE CLAUDE / ANTIGRAVITY CONFIGS
 # ========================
 .claude/
+backend/main.py

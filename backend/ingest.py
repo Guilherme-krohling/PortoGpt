@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+import json
 import chromadb
 from dotenv import load_dotenv
 from tempfile import NamedTemporaryFile
@@ -90,6 +91,25 @@ def upload_arquivo(file):
     finally:
         os.unlink(path)
 
+
+def list_indexed_files():
+    db_dir = Path("backend/chroma_db")
+    client = chromadb.PersistentClient(path=str(db_dir))
+    collection = client.get_or_create_collection("portogpt_collection")
+
+    result = collection.get(include=["metadatas"])
+    result_pretty = json.dumps(result, indent=2, ensure_ascii=False)
+    print(result_pretty)
+
+def is_indexed_file(filename: str):
+    db_dir = Path("backend/chroma_db")
+    client = chromadb.PersistentClient(path=str(db_dir))
+    collection = client.get_or_create_collection("portogpt_collection")
+
+    result = collection.get(where={"file_name": filename} ,include=["metadatas"])
+    result_pretty = json.dumps(result, indent=2, ensure_ascii=False)
+    # print(result_pretty)
+    return bool(result['ids'])
 
 if __name__ == "__main__":
     print("📂 Lendo documentos da base ativa...")
