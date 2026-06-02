@@ -1195,10 +1195,23 @@ def approve_submission(document_id: int, background_tasks: BackgroundTasks = Non
     doc = database.obter_documento_por_id(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Documento não encontrado")
-    _, processed_path = resolve_managed_file(PROCESSED_UPLOADS_DIR, doc.get("processed_filename") or doc["filename"])
+    # Publica na base (data/) o PDF ORIGINAL, não a saída templatizada.
+    # A templatização gera um .html (pré-visualização); copiá-lo para um arquivo .pdf
+    # fazia o indexador ler HTML como PDF e falhar. O original fica em RAW_UPLOADS_DIR.
+    raw_name = doc.get("raw_filename") or doc["filename"]
     dest_path = DATA_DIR / doc["filename"]
     os.makedirs(DATA_DIR, exist_ok=True)
-    shutil.copyfile(processed_path, dest_path)
+
+    raw_path = RAW_UPLOADS_DIR / os.path.basename(raw_name)
+    if not raw_path.exists():
+        # Fallback defensivo: fluxos que já gravam o original direto em data/.
+        fallback_path = DATA_DIR / os.path.basename(raw_name)
+        if not fallback_path.exists():
+            raise HTTPException(status_code=404, detail="PDF original não encontrado para publicação")
+        raw_path = fallback_path
+
+    if raw_path.resolve() != dest_path.resolve():
+        shutil.copyfile(raw_path, dest_path)
 
     result = database.atualizar_status_documento(doc["filename"], "aprovado", approved_by=admin_user["id"])
     if not result["success"]:
