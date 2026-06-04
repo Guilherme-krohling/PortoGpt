@@ -742,6 +742,15 @@ def resolve_data_file(filename: str):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     return safe_filename, file_path
 
+def resolve_pending_file(filename: str):
+    """Resolve com segurança o caminho de um arquivo dentro de data/."""
+    safe_filename = os.path.basename(filename)
+    file_path = (RAW_UPLOADS_DIR / safe_filename).resolve()
+    raw_root = RAW_UPLOADS_DIR.resolve()
+    if not str(file_path).startswith(str(raw_root)) or not file_path.exists():
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    return safe_filename, file_path
+
 
 def resolve_template_file(filename: str):
     """Resolve com segurança o caminho de um arquivo dentro de templates/."""
@@ -1195,16 +1204,13 @@ def approve_submission(document_id: int, background_tasks: BackgroundTasks = Non
     doc = database.obter_documento_por_id(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Documento não encontrado")
-    # Publica na base (data/) o PDF ORIGINAL, não a saída templatizada.
-    # A templatização gera um .html (pré-visualização); copiá-lo para um arquivo .pdf
-    # fazia o indexador ler HTML como PDF e falhar. O original fica em RAW_UPLOADS_DIR.
+    
     raw_name = doc.get("raw_filename") or doc["filename"]
     dest_path = DATA_DIR / doc["filename"]
     os.makedirs(DATA_DIR, exist_ok=True)
 
     raw_path = RAW_UPLOADS_DIR / os.path.basename(raw_name)
     if not raw_path.exists():
-        # Fallback defensivo: fluxos que já gravam o original direto em data/.
         fallback_path = DATA_DIR / os.path.basename(raw_name)
         if not fallback_path.exists():
             raise HTTPException(status_code=404, detail="PDF original não encontrado para publicação")
@@ -1845,7 +1851,11 @@ def toggle_file(filename: str, background_tasks: BackgroundTasks = None, admin_u
 
 @app.delete("/api/docs/{filename}")
 def delete_file(filename: str, background_tasks: BackgroundTasks = None, admin_user=Depends(require_pdf_manager)):
-    safe_filename, file_path = resolve_data_file(filename)
+    try:
+        safe_filename, file_path = resolve_data_file(filename)
+    except HTTPException:
+        safe_filename, file_path = resolve_pending_file(filename)
+        
     try:
         doc = database.obter_documento(safe_filename)
         if doc:

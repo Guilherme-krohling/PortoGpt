@@ -104,6 +104,8 @@ const emptyTemplateForm = {
 const TEMPLATE_CATEGORIES = ['Relatório', 'Ofício', 'Memorando', 'Declaração', 'Contrato', 'Outro']
 
 const TEMPLATE_FIELD_TYPES = [
+  { value: 'title', label: 'Título' },
+  { value: 'subtitle', label: 'Subtítulo' },
   { value: 'text', label: 'Texto curto' },
   { value: 'paragraph', label: 'Parágrafo' },
   { value: 'table', label: 'Tabela' },
@@ -3251,12 +3253,16 @@ function generateTemplateHtml({ name, category, header, footer, fields }) {
     .map((f) => {
       const v = makeVar(f.label)
       const val =
-        f.type === 'paragraph'
+        f.type === 'title'
+          ? `<h2 class="doc-title">{{ ${v} }}</h2>`
+          : f.type === 'subtitle'
+          ? `<h3 class="field-subtitle">{{ ${v} }}</h3>`
+          : f.type === 'paragraph'
           ? `<div class="field-value">{{ ${v} }}</div>`
           : f.type === 'table'
           ? `<table class="field-table">\n        {% for row in ${v}_rows %}\n        <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>\n        {% endfor %}\n      </table>`
           : `<span class="field-value">{{ ${v} }}</span>`
-      return `    <section class="field">\n      <h3 class="field-label">${f.label || 'Campo'}</h3>\n      ${val}\n    </section>`
+      return `    <section class="field">\n      ${val}\n    </section>`
     })
     .join('\n\n')
 
@@ -3288,20 +3294,19 @@ function generateTemplateHtml({ name, category, header, footer, fields }) {
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; background: #fff; min-height: 100vh; display: flex; flex-direction: column; padding-bottom: 64px; }
-    header { display: flex; align-items: center; padding: 18px 40px; border-bottom: 2px solid #0b4fd8; position: relative; }
-    .header-logo { height: 48px; max-width: 120px; object-fit: contain; }
+    header { display: flex; align-items: center; padding: 18px 14px; gap: 1em; max-height: 70pt;}
+    .header-logo { height: auto; max-width: 120px; object-fit: contain; }
     .logo-ph { height: 48px; width: 80px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 10pt; border-radius: 4px; flex-shrink: 0; }
-    .company { position: absolute; left: 0; right: 0; text-align: center; font-size: 18pt; font-weight: 700; color: #0b4fd8; pointer-events: none; }
-    .doc-title { text-align: center; padding: 28px 40px 12px; font-size: 16pt; font-weight: 700; }
-    .doc-category { text-align: center; font-size: 10pt; color: #666; margin-bottom: 28px; }
-    main { flex: 1; padding: 0 40px 40px; }
-    .field { margin-bottom: 22px; }
+    .company {font-size: 11pt; font-weight: 800; text-transform: uppercase; pointer-events: none;}
+    .doc-title { text-align: center; padding: 28px 40px 12px; font-weight: 700; }
+    .field-subtitle { text-align: center; color: #666;}
+    main { flex: 1; padding: 0 40px 40px; display: flex; flex-direction: column; align-items: center; gap: 1em;}
     .field-label { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #0b4fd8; margin-bottom: 6px; }
-    .field-value { font-size: 11pt; color: #333; line-height: 1.6; }
+    .field-value { font-size: 11pt; color: #333; line-height: 1.6; text-align: justify;}
     .field-table { width: 100%; border-collapse: collapse; font-size: 10pt; }
     .field-table td { border: 1px solid #ddd; padding: 6px 10px; }
-    footer { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: ${footerJustify}; padding: 12px 40px; border-top: 1px solid #ddd; background: #fff; z-index: 10; }
-    .footer-logo { height: 32px; max-width: 80px; object-fit: contain; }
+    footer { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: ${footerJustify}; padding: 12px 14px; border-top: 1px solid #ddd; background: #fff; z-index: 10; max-height: 60pt;}
+    .footer-logo { height: 32px; max-width: 80px; object-fit: contain; height: auto;}
     .footer-ph { height: 32px; width: 56px; background: #dce9ff; color: #0b4fd8; display: flex; align-items: center; justify-content: center; font-size: 8pt; border-radius: 3px; }
     .page-num { font-size: 9pt; color: #888; }
   </style>
@@ -3309,11 +3314,8 @@ function generateTemplateHtml({ name, category, header, footer, fields }) {
 <body>
   <header>
     ${logoHtml}
-    <span class="company">${header.companyName || '{{ company_name }}'}</span>
+    <div class="company">${header.companyName || '{{ company_name }}'}</div>
   </header>
-
-  <h1 class="doc-title">${name || '{{ titulo }}'}</h1>
-  <p class="doc-category">${category}</p>
 
   <main>
 ${fieldHtml}
@@ -3336,10 +3338,11 @@ function CreateTemplateModal({ onClose, onCreate }) {
   const [headerData, setHeaderData] = useState({ logoDataUrl: '', companyName: 'Nome da Empresa' })
   const [footerData, setFooterData] = useState({ pagination: 'Página X de Y', logoPosition: 'left' })
   const [fields, setFields] = useState([
-    { id: 1, label: 'Título', type: 'text' },
-    { id: 2, label: 'Conteúdo', type: 'paragraph' },
+    { id: 1, label: 'Título', type: 'title' },
+    { id: 2, label: 'Subtítulo', type: 'subtitle' },
+    { id: 3, label: 'Conteúdo', type: 'paragraph' },
   ])
-  const [nextId, setNextId] = useState(3)
+  const [nextId, setNextId] = useState(4)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
 
