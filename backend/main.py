@@ -50,8 +50,9 @@ app.add_middleware(
 chat_engine = None
 DATA_DIR = Path(__file__).resolve().parent / "data"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
-RAW_UPLOADS_DIR = Path(__file__).resolve().parent / "pending_uploads"
+PENDING_UPLOADS_DIR = Path(__file__).resolve().parent / "pending_uploads"
 PROCESSED_UPLOADS_DIR = Path(__file__).resolve().parent / "processed_uploads"
+RAW_UPLOADS_DIR = Path(__file__).resolve().parent / "raw_uploads"
 METADATA_FILE = Path(__file__).resolve().parent / "docs.json"
 
 # ==========================================
@@ -355,7 +356,7 @@ def startup_event():
     database.init_db()
     database.sync_documents_from_disk(DATA_DIR, load_docs_metadata())
     os.makedirs(TEMPLATES_DIR, exist_ok=True)
-    os.makedirs(RAW_UPLOADS_DIR, exist_ok=True)
+    os.makedirs(PENDING_UPLOADS_DIR, exist_ok=True)
     os.makedirs(PROCESSED_UPLOADS_DIR, exist_ok=True)
     database.sync_templates_from_disk(TEMPLATES_DIR)
 
@@ -743,10 +744,10 @@ def resolve_data_file(filename: str):
     return safe_filename, file_path
 
 def resolve_pending_file(filename: str):
-    """Resolve com segurança o caminho de um arquivo dentro de data/."""
+    """Resolve com segurança o caminho de um arquivo dentro de pending_uploads/."""
     safe_filename = os.path.basename(filename)
-    file_path = (RAW_UPLOADS_DIR / safe_filename).resolve()
-    raw_root = RAW_UPLOADS_DIR.resolve()
+    file_path = (PENDING_UPLOADS_DIR / safe_filename).resolve()
+    raw_root = PENDING_UPLOADS_DIR.resolve()
     if not str(file_path).startswith(str(raw_root)) or not file_path.exists():
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     return safe_filename, file_path
@@ -900,23 +901,26 @@ def _apply_template_to_text(source: str, pdf_text: str) -> tuple:
     return extracted, rendered
 
 
-def process_document_template(raw_path: Path, processed_path: Path) -> Path:
-    """Aplica o primeiro template HTML ativo ao PDF e salva o resultado formatado.
+def process_document_template(raw_path: Path, processed_path: Path, template_filename: str=None) -> Path:
+    """Aplica o template HTML escolhido ao PDF e salva o resultado formatado.
 
     Retorna o caminho real do arquivo processado (pode ser .html ou .pdf).
     """
     try:
-        all_templates = database.listar_templates()
-        active_html = [t for t in all_templates if t.get("active") and str(t.get("filename", "")).endswith(".html")]
+        selected_template = None
+        if template_filename:
+            selected_template = database.obter_template(template_filename)
 
-        if not active_html:
+        if not selected_template:
             shutil.copyfile(raw_path, processed_path)
             return processed_path
+        
+        if not selected_template.get("active"):
+            raise ValueError("Template inativo não pode ser aplicado")
 
-        template_path = TEMPLATES_DIR / active_html[0]["filename"]
+        template_path = TEMPLATES_DIR / selected_template["filename"]
         if not template_path.exists():
-            shutil.copyfile(raw_path, processed_path)
-            return processed_path
+            raise FileNotFoundError("Template não encontrado nos arquivos")
 
         import pypdf
         reader = pypdf.PdfReader(str(raw_path))
@@ -938,45 +942,15 @@ def process_document_template(raw_path: Path, processed_path: Path) -> Path:
         body_variables = [v for v in variables if v.lower() in BODY_VARS]
         field_variables = [v for v in variables if v.lower() not in BODY_VARS]
 
-        extracted = {}
-
-        # Corpo: preenche diretamente com todo o texto do PDF convertido em HTML
-        body_html = pdf_text_to_html(pdf_text)
-        for var in body_variables:
-            extracted[var] = body_html
-
-        # Campos específicos: usa IA apenas se necessário
-        if field_variables:
-            api_key = os.getenv("secret_key")
-            if not api_key:
-                for var in field_variables:
-                    extracted[var] = ""
-            else:
-                fields_list = "\n".join(f"- {v}" for v in field_variables)
-                prompt = (
-                    "Você receberá o texto extraído de um PDF e uma lista de campos.\n"
-                    "Extraia APENAS os valores específicos de cada campo e retorne um JSON.\n"
-                    "Retorne APENAS o JSON, sem explicações.\n\n"
-                    f"CAMPOS:\n{fields_list}\n\n"
-                    f"TEXTO DO PDF:\n{pdf_text[:6000]}\n\n"
-                    "Se um campo não for encontrado, use string vazia."
-                )
-                groq_client = GroqDirect(api_key=api_key)
-                response = groq_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"},
-                    temperature=0.1,
-                )
-                extracted.update(json_module.loads(response.choices[0].message.content))
-
-        extracted.setdefault("page_number", "1")
-        extracted.setdefault("total_pages", "1")
-        extracted.setdefault("logo_url", "")
+        extracted = extract_template_json(pdf_text, body_variables, field_variables)
 
         env = Environment(loader=BaseLoader())
         tmpl = env.from_string(template_source)
         rendered_html = tmpl.render(**extracted)
+
+        pdf_b = _render_pdf_with_chromium(rendered_html)
+        with open(raw_path, 'wb') as f:
+            f.write(pdf_b)
 
         html_path = processed_path.with_suffix(".html")
         html_path.write_text(rendered_html, encoding="utf-8")
@@ -986,6 +960,44 @@ def process_document_template(raw_path: Path, processed_path: Path) -> Path:
         print(f"[process_document_template] Erro ao aplicar template: {exc}")
         shutil.copyfile(raw_path, processed_path)
         return processed_path
+
+def extract_template_json(pdf_text, body_variables, field_variables):
+    extracted = {}
+
+        # Corpo: preenche diretamente com todo o texto do PDF convertido em HTML
+    body_html = pdf_text_to_html(pdf_text)
+    for var in body_variables:
+        extracted[var] = body_html
+
+        # Campos específicos: usa IA apenas se necessário
+    if field_variables:
+        api_key = os.getenv("secret_key")
+        if not api_key:
+            for var in field_variables:
+                extracted[var] = ""
+        else:
+            fields_list = "\n".join(f"- {v}" for v in field_variables)
+            prompt = (
+                    "Você receberá o texto extraído de um PDF e uma lista de campos.\n"
+                    "Extraia APENAS os valores específicos de cada campo e retorne um JSON.\n"
+                    "Retorne APENAS o JSON, sem explicações.\n\n"
+                    f"CAMPOS:\n{fields_list}\n\n"
+                    f"TEXTO DO PDF:\n{pdf_text[:6000]}\n\n"
+                    "Se um campo não for encontrado, use string vazia."
+                )
+            groq_client = GroqDirect(api_key=api_key)
+            response = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.1,
+                )
+            extracted.update(json_module.loads(response.choices[0].message.content))
+
+    extracted.setdefault("page_number", "1")
+    extracted.setdefault("total_pages", "1")
+    extracted.setdefault("logo_url", "")
+    return extracted
 
 
 def register_saved_document(filename: str, original_name: str, file_path: Path, title=None, description=None, uploaded_by=None, status="aprovado", raw_filename=None, processed_filename=None, approved_by=None):
@@ -1029,6 +1041,7 @@ def register_saved_template(filename: str, original_name: str, file_path: Path, 
 @app.post("/api/upload")
 def upload_endpoint(
     file: UploadFile = File(...),
+    template_filename: Optional[str] = Form(default=None),
     message: Optional[str] = Form(default=None),
     session_id: Optional[int] = Form(default=None),
     x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
@@ -1038,15 +1051,19 @@ def upload_endpoint(
         user = require_active_user(x_user_id)
         filename = unique_pdf_filename(file.filename)
         os.makedirs(DATA_DIR, exist_ok=True)
-        os.makedirs(RAW_UPLOADS_DIR, exist_ok=True)
+        os.makedirs(PENDING_UPLOADS_DIR, exist_ok=True)
         os.makedirs(PROCESSED_UPLOADS_DIR, exist_ok=True)
         is_auto_approved = user.get("role") in {"admin", "editor"}
-        dest_path = DATA_DIR / filename if is_auto_approved else RAW_UPLOADS_DIR / filename
+        dest_path = DATA_DIR / filename if is_auto_approved else PENDING_UPLOADS_DIR / filename
+        original_path = RAW_UPLOADS_DIR / filename
         processed_path = PROCESSED_UPLOADS_DIR / filename
         # Salvar arquivo em data/
+        with open(original_path, 'wb') as out:
+            shutil.copyfileobj(file.file, out)
+        file.file.seek(0)
         with open(dest_path, 'wb') as out:
             shutil.copyfileobj(file.file, out)
-        actual_processed = process_document_template(dest_path, processed_path)
+        actual_processed = process_document_template(dest_path, processed_path, template_filename)
         processed_name = actual_processed.name
 
         # Atualizar metadata
@@ -1143,11 +1160,11 @@ def view_document_file(filename: str, user_id: Optional[int] = None, x_user_id: 
     user = database.obter_usuario(resolved_user_id) if resolved_user_id else None
     doc = database.obter_documento(os.path.basename(filename))
     if not doc:
-        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+        raise HTTPException(status_code=404, detail="Documento não encontrado")
     if doc.get("status") != "aprovado" and user and user.get("role") not in {"admin", "editor"}:
-        raise HTTPException(status_code=403, detail="Documento ainda nÃ£o aprovado")
+        raise HTTPException(status_code=403, detail="Documento ainda não aprovado")
     if doc.get("status") != "aprovado" and not user:
-        raise HTTPException(status_code=403, detail="Documento ainda nÃ£o aprovado")
+        raise HTTPException(status_code=403, detail="Documento ainda não aprovado")
     _, file_path = resolve_data_file(filename)
     headers = {"Content-Disposition": f'inline; filename="{doc.get("original_name") or filename}"'}
     return FileResponse(file_path, media_type="application/pdf", headers=headers)
@@ -1170,10 +1187,10 @@ def view_raw_submission(document_id: int, user_id: Optional[int] = None, x_user_
     current_user = require_active_user(x_user_id or user_id)
     doc = database.obter_documento_por_id(document_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+        raise HTTPException(status_code=404, detail="Documento não encontrado")
     if current_user.get("role") != "admin" and doc.get("uploaded_by") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Acesso negado")
-    root = DATA_DIR if doc.get("status") == "aprovado" else RAW_UPLOADS_DIR
+    root = RAW_UPLOADS_DIR
     _, file_path = resolve_managed_file(root, doc.get("raw_filename") or doc["filename"])
     headers = {"Content-Disposition": f'inline; filename="{doc.get("original_name") or doc["filename"]}"'}
     return FileResponse(file_path, media_type="application/pdf", headers=headers)
@@ -1209,7 +1226,7 @@ def approve_submission(document_id: int, background_tasks: BackgroundTasks = Non
     dest_path = DATA_DIR / doc["filename"]
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    raw_path = RAW_UPLOADS_DIR / os.path.basename(raw_name)
+    raw_path = PENDING_UPLOADS_DIR / os.path.basename(raw_name)
     if not raw_path.exists():
         fallback_path = DATA_DIR / os.path.basename(raw_name)
         if not fallback_path.exists():
@@ -1239,7 +1256,7 @@ def approve_submission(document_id: int, background_tasks: BackgroundTasks = Non
 def reject_submission(document_id: int, request: RejectDocumentRequest, admin_user=Depends(require_admin)):
     doc = database.obter_documento_por_id(document_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
+        raise HTTPException(status_code=404, detail="Documento não encontrado")
     if not request.feedback.strip():
         raise HTTPException(status_code=400, detail="Informe o motivo da reprovaÃ§Ã£o")
     result = database.atualizar_status_documento(doc["filename"], "reprovado", feedback=request.feedback)
@@ -1266,9 +1283,9 @@ def resubmit_submission(
         raise HTTPException(status_code=400, detail="Limite de reenvio atingido para esta solicitação")
 
     filename = doc["filename"]
-    raw_path = RAW_UPLOADS_DIR / filename
+    raw_path = PENDING_UPLOADS_DIR / filename
     processed_path = PROCESSED_UPLOADS_DIR / filename
-    os.makedirs(RAW_UPLOADS_DIR, exist_ok=True)
+    os.makedirs(PENDING_UPLOADS_DIR, exist_ok=True)
     os.makedirs(PROCESSED_UPLOADS_DIR, exist_ok=True)
 
     with open(raw_path, "wb") as out:
@@ -1329,7 +1346,7 @@ def read_notifications(current_user=Depends(require_active_user)):
 
 
 @app.get("/api/templates")
-def list_templates(admin_user=Depends(require_admin)):
+def list_templates():
     """Lista templates cadastrados com metadados do SQLite."""
     os.makedirs(TEMPLATES_DIR, exist_ok=True)
     database.sync_templates_from_disk(TEMPLATES_DIR)
@@ -1724,9 +1741,14 @@ def upload_admin_document(
     try:
         filename = unique_pdf_filename(file.filename)
         dest_path = DATA_DIR / filename
+        original_path = RAW_UPLOADS_DIR / filename
         os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(RAW_UPLOADS_DIR, exist_ok=True)
 
         with open(dest_path, 'wb') as out:
+            shutil.copyfileobj(file.file, out)
+        file.file.seek(0)
+        with open(original_path, 'wb') as out:
             shutil.copyfileobj(file.file, out)
         os.makedirs(PROCESSED_UPLOADS_DIR, exist_ok=True)
         process_document_template(dest_path, PROCESSED_UPLOADS_DIR / filename)

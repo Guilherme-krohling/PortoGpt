@@ -4170,3 +4170,10 @@ button:disabled {
   gap: 6px;
   font-size: 13px;
 }
+
+.template-dropdown{
+  margin-left: 1em;
+  font-size: small;
+  min-height: 0;
+  height: 27px;
+}

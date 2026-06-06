@@ -772,6 +772,8 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
   const [lastUploadedPdfText, setLastUploadedPdfText] = useState('')
   const [templateViewerHtml, setTemplateViewerHtml] = useState(null)
   const [templateViewerTitle, setTemplateViewerTitle] = useState('')
+  const [activeTemplatesForUpload, setActiveTemplatesForUpload] = useState([])
+  const [templateForUpload, setTemplateForUpload] = useState('')
   const chatContainerRef = useRef(null)
   const fileInput = useRef(null)
 
@@ -963,54 +965,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     if (!text || loading || historyLoading) return
 
     if (TEMPLATE_INTENT_RE.test(text)) {
-      setMessages((prev) => [...prev, { role: 'user', text }])
-      setInput('')
-      setLoading(true)
-      try {
-        const payload = await apiRequest('/templates', { userId: currentUser.id })
-        const activeTemplates = (payload.templates || []).filter((t) => t.active)
-        // Preferir o texto extraído diretamente do PDF enviado; fallback para histórico do chat
-        const pdfContext = lastUploadedPdfText || messages.map((m) => m.text).filter(Boolean).join('\n')
-        if (!activeTemplates.length) {
-          const assistantText = 'Nenhum template ativo cadastrado. Peça ao administrador para criar ou ativar um.'
-          try {
-            const saveRes = await apiRequest('/chat/history', {
-              method: 'POST',
-              body: { user_id: currentUser.id, session_id: currentSessionId, user_message: text, assistant_message: assistantText }
-            })
-            if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
-              setCurrentSessionId(saveRes.session_id)
-              onSessionChange?.(saveRes.session_id)
-            }
-          } catch (e) {}
-          setMessages((prev) => [...prev, { role: 'assistant', text: assistantText }])
-        } else {
-          const assistantText = 'Escolha o template desejado e selecione o PDF a formatar:'
-          try {
-            const saveRes = await apiRequest('/chat/history', {
-              method: 'POST',
-              body: { user_id: currentUser.id, session_id: currentSessionId, user_message: text, 
-                assistant_message: assistantText, metadata: {templateSelect: { templates: activeTemplates, pdfContext }} }
-            })
-            if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
-              setCurrentSessionId(saveRes.session_id)
-              onSessionChange?.(saveRes.session_id)
-            }
-          } catch (e) {}
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: 'assistant',
-              text: assistantText,
-              templateSelect: { templates: activeTemplates, pdfContext },
-            },
-          ])
-        }
-      } catch {
-        setMessages((prev) => [...prev, { role: 'assistant', text: 'Não foi possível carregar os templates.' }])
-      } finally {
-        setLoading(false)
-      }
+      await chatApplyTemplate(text)
       return
     }
 
@@ -1056,6 +1011,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     const formData = new FormData()
     formData.append('file', selectedFile)
     formData.append('message', text)
+    formData.append('template_filename', templateForUpload)
     if (currentSessionId) formData.append('session_id', String(currentSessionId))
 
     setMessages((prev) => [...prev, {
@@ -1090,13 +1046,77 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     } finally {
       setLoading(false)
       setFile(null)
+      setActiveTemplatesForUpload([])
+      setTemplateForUpload('')
       if (fileInput.current) fileInput.current.value = ''
     }
   }
 
   const closeUploadModal = () => {
     setFile(null)
+    setActiveTemplatesForUpload([])
+    setTemplateForUpload('')
     if (fileInput.current) fileInput.current.value = ''
+  }
+
+  const startUpload = async () => {
+    const payload = await apiRequest('/templates')
+    const activeTemplates = (payload.templates || []).filter((t) => t.active)
+    setActiveTemplatesForUpload(activeTemplates)
+    fileInput.current?.click()
+  }
+
+  async function chatApplyTemplate(text) {
+    setMessages((prev) => [...prev, { role: 'user', text }])
+    setInput('')
+    setLoading(true)
+    try {
+      const payload = await apiRequest('/templates')
+      const activeTemplates = (payload.templates || []).filter((t) => t.active)
+      // Preferir o texto extraído diretamente do PDF enviado; fallback para histórico do chat
+      const pdfContext = lastUploadedPdfText || messages.map((m) => m.text).filter(Boolean).join('\n')
+      if (!activeTemplates.length) {
+        const assistantText = 'Nenhum template ativo cadastrado. Peça ao administrador para criar ou ativar um.'
+        try {
+          const saveRes = await apiRequest('/chat/history', {
+            method: 'POST',
+            body: { user_id: currentUser.id, session_id: currentSessionId, user_message: text, assistant_message: assistantText }
+          })
+          if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
+            setCurrentSessionId(saveRes.session_id)
+            onSessionChange?.(saveRes.session_id)
+          }
+        } catch (e) { }
+        setMessages((prev) => [...prev, { role: 'assistant', text: assistantText }])
+      } else {
+        const assistantText = 'Escolha o template desejado e selecione o PDF a formatar:'
+        try {
+          const saveRes = await apiRequest('/chat/history', {
+            method: 'POST',
+            body: {
+              user_id: currentUser.id, session_id: currentSessionId, user_message: text,
+              assistant_message: assistantText, metadata: { templateSelect: { templates: activeTemplates, pdfContext } }
+            }
+          })
+          if (saveRes.session_id && saveRes.session_id !== currentSessionId) {
+            setCurrentSessionId(saveRes.session_id)
+            onSessionChange?.(saveRes.session_id)
+          }
+        } catch (e) { }
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            text: assistantText,
+            templateSelect: { templates: activeTemplates, pdfContext },
+          },
+        ])
+      }
+    } catch {
+      setMessages((prev) => [...prev, { role: 'assistant', text: 'Não foi possível carregar os templates.' }])
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -1235,6 +1255,14 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
           <div className="composer-attachment">
             <FileText size={16} />
             <span>{file.name}</span>
+            <select className="select-control template-dropdown" value={templateForUpload} onChange={(e) => setTemplateForUpload(e.target.value)}>
+              <option value="">Sem template</option>
+              {activeTemplatesForUpload.map((tpl) => (
+                <option key={tpl.filename} value={tpl.filename}>
+                  {tpl.title || tpl.filename}
+                </option>
+              ))}
+            </select>
             <button onClick={closeUploadModal} aria-label="Remover anexo">
               <X size={14} />
             </button>
@@ -1268,7 +1296,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
             }}
             style={{ display: 'none' }}
           />
-          <button className="icon-btn" title="Fazer upload de arquivo PDF" onClick={() => fileInput.current?.click()} disabled={loading || historyLoading}>
+          <button className="icon-btn" title="Fazer upload de arquivo PDF" onClick={startUpload} disabled={loading || historyLoading}>
             <FileUp size={20} />
           </button>
           <button className="send-btn" title="Enviar mensagem" onClick={() => (file ? finishUpload() : sendMessage())} disabled={loading || historyLoading || (!input.trim() && !file)}>
@@ -2783,7 +2811,7 @@ function TemplateManagementPage({ currentUser }) {
     setError('')
 
     try {
-      const payload = await apiRequest('/templates', { userId: currentUser.id })
+      const payload = await apiRequest('/templates')
       setTemplates(payload.templates || [])
     } catch (err) {
       setError(err.message)
