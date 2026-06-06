@@ -1448,7 +1448,7 @@ function AdminDashboardPage({ currentUser, onNavigate }) {
           <div className="section-heading compact">
             <div>
               <h2>Atividade recente</h2>
-              <p>�altimas movimentações na base documental.</p>
+              <p>Últimas movimentações na base documental.</p>
             </div>
           </div>
           <div className="dashboard-activity">
@@ -1656,7 +1656,7 @@ function AdminUsersPage({ currentUser }) {
               <th>Função</th>
               <th>Status</th>
               <th>Criado em</th>
-              <th>�altimo acesso</th>
+              <th>Último acesso</th>
               <th className="actions-col">Ações</th>
             </tr>
           </thead>
@@ -2890,7 +2890,7 @@ function TemplateManagementPage({ currentUser }) {
       })
       setEditorTemplate({ ...tpl, html: payload.html })
     } catch {
-      // Arquivo novo ainda não existe no servidor � usa HTML gerado localmente
+      // Arquivo novo ainda não existe no servidor - usa HTML gerado localmente
       setEditorTemplate({ ...tpl, html: tpl._html || generateDefaultHtml(tpl) })
     }
   }
@@ -4028,7 +4028,7 @@ function ProfilePage({ currentUser, onAccentChange, onNavigate }) {
             <dd>{formatDate(currentUser.created_at)}</dd>
           </div>
           <div>
-            <dt>�altimo acesso</dt>
+            <dt>Último acesso</dt>
             <dd>{formatDate(currentUser.last_login, 'Nunca')}</dd>
           </div>
         </dl>
