@@ -15,6 +15,7 @@ import {
   Database,
   Download,
   Eye,
+  Filter,
   FileText,
   FileUp,
   Home,
@@ -466,7 +467,7 @@ function ChatSidebar({
 
   const loadSessions = useCallback(async () => {
     if (!currentUser?.id) return
-    setLoading(true)
+    setLoading((prev) => (sessions.length ? prev : true))
 
     try {
       const payload = await apiRequest(`/chat/sessions/${currentUser.id}`)
@@ -476,7 +477,7 @@ function ChatSidebar({
     } finally {
       setLoading(false)
     }
-  }, [currentUser?.id])
+  }, [currentUser?.id, sessions.length])
 
   useEffect(() => {
     loadSessions()
@@ -593,7 +594,7 @@ function ChatSidebar({
         </div>
 
         <div className="history-list">
-          {loading && <div className="history-state">Carregando conversas...</div>}
+          {loading && sessions.length === 0 && <div className="history-state">Carregando conversas...</div>}
           {!loading && sessions.length === 0 && <div className="history-state">Nenhuma conversa salva ainda.</div>}
           {!loading && sessions.length > 0 && visibleSessions.length === 0 && (
             <div className="history-state">Nenhum chat encontrado.</div>
@@ -789,13 +790,13 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
       {
         id: 'sug-recent',
         title: 'Documento publicado recentemente',
-        subtitle: 'Carregando…',
+        subtitle: 'Carregando⬦',
         prompt: 'Liste os documentos mais recentes (se possível) e sugira por onde começar.',
       },
       {
         id: 'sug-top-week',
         title: 'Mais perguntado essa semana',
-        subtitle: 'Carregando…',
+        subtitle: 'Carregando⬦',
         prompt: 'Qual tem sido o tema mais perguntado esta semana? Resuma e aponte trechos relevantes.',
       },
       {
@@ -857,7 +858,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
               return { ...tile, subtitle: 'Sem dados suficientes', prompt: 'Me sugira 3 perguntas úteis com base nos documentos ativos para eu começar.' }
             }
             const question = String(topQuestion.message)
-            const short = question.length > 44 ? `${question.slice(0, 44).trim()}…` : question
+            const short = question.length > 44 ? `${question.slice(0, 44).trim()}⬦` : question
             return { ...tile, subtitle: short, prompt: question }
           }
 
@@ -914,7 +915,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     setLoading(true)
     setMessages((prev) => [...prev, {
       role: 'assistant',
-      text: `Aplicando o template **${template.title || template.filename}** ao arquivo **${file.name}**…`,
+      text: `Aplicando o template **${template.title || template.filename}** ao arquivo **${file.name}**⬦`,
     }])
     try {
       const formData = new FormData()
@@ -1136,12 +1137,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
         />
       )}
       <div className="chat-area" ref={chatContainerRef}>
-        {historyLoading ? (
-          <div className="welcome-screen loading-history">
-            <h1>Carregando conversa</h1>
-            <p>Recuperando as mensagens salvas no histórico.</p>
-          </div>
-        ) : messages.length === 0 ? (
+        {messages.length === 0 && !sessionId ? (
           <div className="welcome-screen welcome-hero">
             <div className="welcome-orb orb-one" aria-hidden="true" />
             <div className="welcome-orb orb-two" aria-hidden="true" />
@@ -1452,7 +1448,7 @@ function AdminDashboardPage({ currentUser, onNavigate }) {
           <div className="section-heading compact">
             <div>
               <h2>Atividade recente</h2>
-              <p>Últimas movimentações na base documental.</p>
+              <p>�altimas movimentações na base documental.</p>
             </div>
           </div>
           <div className="dashboard-activity">
@@ -1660,7 +1656,7 @@ function AdminUsersPage({ currentUser }) {
               <th>Função</th>
               <th>Status</th>
               <th>Criado em</th>
-              <th>Último acesso</th>
+              <th>�altimo acesso</th>
               <th className="actions-col">Ações</th>
             </tr>
           </thead>
@@ -2008,8 +2004,8 @@ function PdfManagementPage({ currentUser }) {
 
   const filteredDocs = useMemo(() => {
     const query = search.trim().toLowerCase()
-    if (!query) return docs
     return docs.filter((doc) => {
+      if (!query) return true
       return (
         doc.filename?.toLowerCase().includes(query) ||
         doc.title?.toLowerCase().includes(query) ||
@@ -2355,6 +2351,7 @@ function MySubmissionsPage({ currentUser }) {
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [dateFilter, setDateFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('pendente')
 
   const loadSubmissions = useCallback(async () => {
     setLoading(true)
@@ -2390,8 +2387,8 @@ function MySubmissionsPage({ currentUser }) {
   }
 
   const filteredSubmissions = useMemo(
-    () => filterSubmissions(submissions, search, dateFilter),
-    [submissions, search, dateFilter],
+    () => filterSubmissions(submissions, search, dateFilter, statusFilter),
+    [submissions, search, dateFilter, statusFilter],
   )
 
   return (
@@ -2408,11 +2405,14 @@ function MySubmissionsPage({ currentUser }) {
       <SubmissionFilters
         search={search}
         dateFilter={dateFilter}
+        statusFilter={statusFilter}
         onSearchChange={setSearch}
         onDateChange={setDateFilter}
+        onStatusChange={setStatusFilter}
         onClear={() => {
           setSearch('')
           setDateFilter('')
+          setStatusFilter('pendente')
         }}
       />
 
@@ -2511,6 +2511,7 @@ function ApprovalRequestsPage({ currentUser }) {
   const [rejectingSubmission, setRejectingSubmission] = useState(null)
   const [search, setSearch] = useState('')
   const [dateFilter, setDateFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('pendente')
 
   const loadSubmissions = useCallback(async () => {
     setLoading(true)
@@ -2563,8 +2564,8 @@ function ApprovalRequestsPage({ currentUser }) {
   }
 
   const filteredSubmissions = useMemo(
-    () => filterSubmissions(submissions, search, dateFilter),
-    [submissions, search, dateFilter],
+    () => filterSubmissions(submissions, search, dateFilter, statusFilter),
+    [submissions, search, dateFilter, statusFilter],
   )
 
   return (
@@ -2588,11 +2589,14 @@ function ApprovalRequestsPage({ currentUser }) {
       <SubmissionFilters
         search={search}
         dateFilter={dateFilter}
+        statusFilter={statusFilter}
         onSearchChange={setSearch}
         onDateChange={setDateFilter}
+        onStatusChange={setStatusFilter}
         onClear={() => {
           setSearch('')
           setDateFilter('')
+          setStatusFilter('pendente')
         }}
       />
 
@@ -2647,7 +2651,10 @@ function DocumentCards({ docs, currentUser, emptyText, actions }) {
   )
 }
 
-function SubmissionFilters({ search, dateFilter, onSearchChange, onDateChange, onClear }) {
+function SubmissionFilters({ search, dateFilter, statusFilter, onSearchChange, onDateChange, onStatusChange, onClear }) {
+  const hasStatusFilter = typeof statusFilter === 'string' && typeof onStatusChange === 'function'
+  const hasActiveFilters = search || dateFilter || (hasStatusFilter && statusFilter !== 'pendente')
+
   return (
     <div className="admin-toolbar submission-filters">
       <label className="search-field">
@@ -2659,6 +2666,21 @@ function SubmissionFilters({ search, dateFilter, onSearchChange, onDateChange, o
           onChange={(event) => onSearchChange(event.target.value)}
         />
       </label>
+      {hasStatusFilter && (
+        <label className="date-filter-field status-filter-field">
+          <Filter size={17} />
+          <select
+            value={statusFilter}
+            onChange={(event) => onStatusChange(event.target.value)}
+            aria-label="Filtrar por status"
+          >
+            <option value="">Todos</option>
+            <option value="pendente">Pendente</option>
+            <option value="aprovado">Aprovado</option>
+            <option value="reprovado">Reprovado</option>
+          </select>
+        </label>
+      )}
       <label className="date-filter-field">
         <Clock size={17} />
         <input
@@ -2667,7 +2689,7 @@ function SubmissionFilters({ search, dateFilter, onSearchChange, onDateChange, o
           onChange={(event) => onDateChange(event.target.value)}
         />
       </label>
-      {(search || dateFilter) && (
+      {hasActiveFilters && (
         <button className="ghost-btn" onClick={onClear}>
           <X size={16} />
           Limpar filtros
@@ -2868,7 +2890,7 @@ function TemplateManagementPage({ currentUser }) {
       })
       setEditorTemplate({ ...tpl, html: payload.html })
     } catch {
-      // Arquivo novo ainda não existe no servidor — usa HTML gerado localmente
+      // Arquivo novo ainda não existe no servidor � usa HTML gerado localmente
       setEditorTemplate({ ...tpl, html: tpl._html || generateDefaultHtml(tpl) })
     }
   }
@@ -3187,6 +3209,7 @@ function TemplateModal({ initialTemplate, mode, onClose, onSave }) {
           <input value={formData.title} onChange={(event) => updateField('title', event.target.value)} required />
         </label>
 
+
         <label className="textarea-field">
           Descrição
           <textarea
@@ -3280,7 +3303,7 @@ function generateTemplateHtml({ name, category, header, footer, fields }) {
     label
       .toLowerCase()
       .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
+      .replace(/[\u0300-\u036f]/g, '')
       .replace(/\s+/g, '_')
       .replace(/[^a-z0-9_]/g, '') || 'campo'
 
@@ -3632,7 +3655,7 @@ function HtmlDocViewer({ html, title, onClose }) {
         </div>
         <button className="ghost-btn" onClick={handleDownloadPdf} disabled={downloading} title="Baixar como PDF">
           <Download size={16} />
-          {downloading ? 'Gerando PDF…' : 'Baixar PDF'}
+          {downloading ? 'Gerando PDF⬦' : 'Baixar PDF'}
         </button>
       </div>
       {downloadError && (
@@ -3938,6 +3961,7 @@ function DocumentModal({ initialDocument, mode, onClose, onSave }) {
           <input value={formData.title} onChange={(event) => updateField('title', event.target.value)} required />
         </label>
 
+
         <label className="textarea-field">
           Descrição
           <textarea
@@ -4004,7 +4028,7 @@ function ProfilePage({ currentUser, onAccentChange, onNavigate }) {
             <dd>{formatDate(currentUser.created_at)}</dd>
           </div>
           <div>
-            <dt>Último acesso</dt>
+            <dt>�altimo acesso</dt>
             <dd>{formatDate(currentUser.last_login, 'Nunca')}</dd>
           </div>
         </dl>
@@ -4349,7 +4373,7 @@ function eventLabel(event) {
   return labels[event.event_type] || labels[event.status] || event.event_type || 'Atualização'
 }
 
-function filterSubmissions(submissions, search, dateFilter) {
+function filterSubmissions(submissions, search, dateFilter, statusFilter = '') {
   const query = search.trim().toLowerCase()
   return [...submissions]
     .sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')))
@@ -4357,6 +4381,8 @@ function filterSubmissions(submissions, search, dateFilter) {
       const dateSource = String(submission.updated_at || submission.created_at || '')
       const matchesDate = !dateFilter || dateSource.startsWith(dateFilter)
       if (!matchesDate) return false
+      const matchesStatus = !statusFilter || submission.status === statusFilter
+      if (!matchesStatus) return false
       if (!query) return true
       return [
         submission.title,

@@ -23,7 +23,6 @@ DEFAULT_AI_SETTINGS = {
     "custom_instructions": "",
 }
 
-
 def brasilia_now() -> str:
     """Retorna data/hora atual no horário oficial de Brasília."""
     return datetime.now(BRASILIA_TZ).strftime("%Y-%m-%d %H:%M:%S")
