@@ -29,7 +29,7 @@ backend/chroma_db/
 # Dados (PDFs)
 # Se quiser salvar os PDFs no Git, apague a linha abaixo.
 # Se forem muitos ou pesados, mantenha ignorado.
-backend/data/
+# backend/data/
 
 # ========================
 # FRONTEND (REACT/NODE)
