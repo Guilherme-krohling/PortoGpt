@@ -101,7 +101,14 @@ const emptyTemplateForm = {
   active: true,
 }
 
-const TEMPLATE_CATEGORIES = ['Relatório', 'Ofício', 'Memorando', 'Declaração', 'Contrato', 'Outro']
+const TEMPLATE_CATEGORIES = [
+  'CIRCULAR',
+  'MANUAL',
+  'POLÍTICA',
+  'PROCEDIMENTO',
+  'REGIMENTO',
+  'RELATÓRIO'
+]
 
 const TEMPLATE_FIELD_TYPES = [
   { value: 'title', label: 'Título' },
@@ -1283,7 +1290,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
                 else sendMessage()
               }
             }}
-            placeholder={file ? 'Escreva uma mensagem para enviar com o PDF...' : 'Digite sua pergunta aqui...'}
+            placeholder={file ? 'Escreva uma descrição para o PDF...' : 'Digite sua pergunta aqui...'}
             disabled={loading || historyLoading}
           />
           <input

@@ -1072,7 +1072,7 @@ def upload_endpoint(
             meta[filename] = {"active": True}
             save_docs_metadata(meta)
             document = register_saved_document(
-                filename, file.filename, dest_path, uploaded_by=user["id"],
+                filename, file.filename, dest_path, uploaded_by=user["id"], description=message or "",
                 status="aprovado", raw_filename=filename, processed_filename=processed_name, approved_by=user["id"],
             )
             database.registrar_evento_documento(document["id"], "inserido", "aprovado", "Upload pelo chat com aprovação automatica.", user["id"])
@@ -1083,7 +1083,7 @@ def upload_endpoint(
                 filename=filename,
                 original_name=file.filename,
                 title=Path(file.filename).stem,
-                description="",
+                description=message or "",
                 size=stat.st_size,
                 mtime=int(stat.st_mtime),
                 active=False,
