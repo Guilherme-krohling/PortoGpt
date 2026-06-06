@@ -2,35 +2,6 @@
   "documento_denso_3.pdf": {
     "active": true
   },
-  "documento_4.pdf": {
-    "active": true,
-    "title": "documento_4",
-    "description": ""
-  },
-  "corpuschristi.pdf": {
-    "active": true
-  },
-  "dispensadiadotrabalhador2025.pdf": {
-    "active": true,
-    "title": "dispensadiadotrabalhador2025",
-    "description": ""
-  },
-  "corpuschristi_1778261426820.pdf": {
-    "active": true
-  },
-  "corpuschristi_1778261503292.pdf": {
-    "active": true,
-    "title": "corpuschristi",
-    "description": ""
-  },
-  "PROJETO PLANO DE CARREIRA_1778261757028.pdf": {
-    "active": true
-  },
-  "corpuschristi_1778264169767.pdf": {
-    "active": true,
-    "title": "dispensadiadotrabalhador2025",
-    "description": ""
-  },
   "documento_portogpt_1778285151605.pdf": {
     "active": true
   },
@@ -52,6 +23,81 @@
   "pedido_de_compra_1780379832502.pdf": {
     "active": true,
     "title": "pedido_de_compra",
+    "description": ""
+  },
+  "CIRCULAR DIADM Nº 03_1780704870335.pdf": {
+    "active": true,
+    "title": "CIRCULAR DIADM Nº 03",
+    "description": ""
+  },
+  "CIRCULAR DIADM Nº 04_1780704876517.pdf": {
+    "active": true,
+    "title": "CIRCULAR DIADM Nº 04",
+    "description": ""
+  },
+  "CIRCULAR DIADM Nº 05_1780705773215.pdf": {
+    "active": true,
+    "title": "CIRCULAR DIADM Nº 05",
+    "description": ""
+  },
+  "CIRCULAR DIADM Nº 06_1780705779930.pdf": {
+    "active": true,
+    "title": "CIRCULAR DIADM Nº 06",
+    "description": ""
+  },
+  "CIRCULAR DIADM Nº 07_1780705786938.pdf": {
+    "active": true,
+    "title": "CIRCULAR DIADM Nº 07",
+    "description": ""
+  },
+  "MANUAL DO COLABORADOR_1780706271048.pdf": {
+    "active": true,
+    "title": "MANUAL DO COLABORADOR",
+    "description": ""
+  },
+  "MANUAL DOS SISTEMAS CORPORATIVOS_1780709522952.pdf": {
+    "active": true,
+    "title": "MANUAL DOS SISTEMAS CORPORATIVOS",
+    "description": ""
+  },
+  "POLÍTICA DE PROTEÇÃO DE DADOS PESSOAIS_1780709529700.pdf": {
+    "active": true,
+    "title": "POLÍTICA DE PROTEÇÃO DE DADOS PESSOAIS",
+    "description": ""
+  },
+  "POLÍTICA DE SEGURANÇA DA INFORMAÇÃO_1780709539569.pdf": {
+    "active": true,
+    "title": "POLÍTICA DE SEGURANÇA DA INFORMAÇÃO",
+    "description": ""
+  },
+  "POLÍTICA DE TRABALHO REMOTO E HÍBRIDO_1780709546271.pdf": {
+    "active": true,
+    "title": "POLÍTICA DE TRABALHO REMOTO E HÍBRIDO",
+    "description": ""
+  },
+  "PROCEDIMENTO DE ABERTURA E TRATAMENTO DE CHAMADOS DE TI_1780709555367.pdf": {
+    "active": true,
+    "title": "PROCEDIMENTO DE ABERTURA E TRATAMENTO DE CHAMADOS DE TI",
+    "description": ""
+  },
+  "PROCEDIMENTO DE CONTROLE DE ACESSO A SISTEMAS CORPORATIVOS_1780709563749.pdf": {
+    "active": true,
+    "title": "PROCEDIMENTO DE CONTROLE DE ACESSO A SISTEMAS CORPORATIVOS",
+    "description": ""
+  },
+  "REGIMENTO INTERNO DA DIRETORIA DE TECNOLOGIA DA INFORMAÇÃO_1780709570895.pdf": {
+    "active": true,
+    "title": "REGIMENTO INTERNO DA DIRETORIA DE TECNOLOGIA DA INFORMAÇÃO",
+    "description": ""
+  },
+  "REGIMENTO INTERNO DA EMPRESA_1780709578665.pdf": {
+    "active": true,
+    "title": "REGIMENTO INTERNO DA EMPRESA",
+    "description": ""
+  },
+  "RELATÓRIO ANUAL DE TECNOLOGIA DA INFORMAÇÃO 2025_1780709591216.pdf": {
+    "active": true,
+    "title": "RELATÓRIO ANUAL DE TECNOLOGIA DA INFORMAÇÃO 2025",
     "description": ""
   }
 }

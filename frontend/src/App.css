@@ -2843,7 +2843,7 @@ button:disabled {
 }
 
 .submission-filters {
-  grid-template-columns: minmax(240px, 1fr) auto auto;
+  grid-template-columns: minmax(240px, 1fr) auto auto auto;
 }
 
 .date-filter-field {
@@ -2859,6 +2859,15 @@ button:disabled {
 }
 
 .date-filter-field input {
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  outline: none;
+}
+
+.status-filter-field select {
+  min-width: 128px;
   border: 0;
   color: var(--text);
   background: transparent;
@@ -3089,18 +3098,35 @@ button:disabled {
   background: var(--surface-soft);
 }
 
-.dashboard-activity strong,
-.dashboard-activity span {
+.dashboard-activity article > div > strong,
+.dashboard-activity article > div > span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.dashboard-activity span {
+.dashboard-activity article > div > span {
   margin-top: 3px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.dashboard-activity .status-badge {
+  display: inline-flex;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.dashboard-activity .status-badge span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  margin: 0;
 }
 
 .notifications-page {

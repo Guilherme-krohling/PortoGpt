@@ -48,6 +48,7 @@ app.add_middleware(
 
 # Variável global para o motor de chat
 chat_engine = None
+reranker = None
 DATA_DIR = Path(__file__).resolve().parent / "data"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 RAW_UPLOADS_DIR = Path(__file__).resolve().parent / "pending_uploads"
@@ -251,7 +252,7 @@ def build_system_prompt():
 
 def carregar_chat_engine():
     """Carrega ou recarrega o motor de chat a partir do ChromaDB."""
-    global chat_engine
+    global chat_engine, reranker
     settings = database.obter_ai_settings()
 
     print("💾 Carregando memória de longo prazo (ChromaDB)...")
@@ -263,12 +264,20 @@ def carregar_chat_engine():
         embed_model=Settings.embed_model
     )
 
-    reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=3)
+    node_postprocessors = []
+    if reranker is None:
+        try:
+            reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=3)
+        except Exception as e:
+            reranker = None
+            print(f"Reranker indisponivel; seguindo sem rerank: {e}")
+    if reranker is not None:
+        node_postprocessors.append(reranker)
 
     chat_engine = index.as_chat_engine(
         chat_mode="context",
         similarity_top_k=int(settings.get("similarity_top_k", 10)),
-        node_postprocessors=[reranker],
+        node_postprocessors=node_postprocessors,
         system_prompt=build_system_prompt()
     )
 
@@ -301,7 +310,14 @@ def rebuild_index(file_paths=None):
     try:
         backend_dir = Path(__file__).resolve().parent
         command = [sys.executable, "ingest.py", *files] if files else [sys.executable, "ingest.py", "--empty"]
-        completed = subprocess.run(command, cwd=str(backend_dir), capture_output=True, text=True)
+        completed = subprocess.run(
+            command,
+            cwd=str(backend_dir),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         if completed.stdout:
             print(completed.stdout)
         if completed.returncode != 0:
@@ -340,6 +356,43 @@ def ensure_chat_engine():
     if chat_engine is None:
         carregar_chat_engine()
     return chat_engine
+
+
+def is_document_inventory_query(query: str) -> bool:
+    """Detecta perguntas sobre quais documentos estao disponiveis na base."""
+    text = (query or "").strip().lower()
+    if not text:
+        return False
+
+    document_terms = ("documento", "documentos", "pdf", "pdfs", "arquivo", "arquivos", "base")
+    inventory_terms = (
+        "quais", "qual", "listar", "liste", "lista", "tenho", "tem", "estao",
+        "estão", "disponiveis", "disponíveis", "acesso", "base", "consulta",
+    )
+    return any(term in text for term in document_terms) and any(term in text for term in inventory_terms)
+
+
+def build_document_inventory_response() -> str:
+    docs = [
+        doc for doc in database.listar_documentos(status="aprovado")
+        if doc.get("active")
+    ]
+
+    if not docs:
+        return (
+            "## Resultado\n\n"
+            "No momento, nao ha documentos aprovados e ativos disponiveis para consulta."
+        )
+
+    lines = [
+        f"- **{doc.get('title') or doc.get('original_name') or doc['filename']}**"
+        for doc in docs
+    ]
+    return (
+        "## Resultado\n\n"
+        "Atualmente, tenho acesso aos seguintes documentos aprovados e ativos para consulta:\n\n"
+        + "\n".join(lines)
+    )
 
 # ==========================================
 # INICIALIZAÇÃO (Startup)
@@ -549,6 +602,16 @@ def chat_endpoint(request: ChatRequest):
     
     try:
         # O chat_engine gerencia o histórico automaticamente
+        if is_document_inventory_query(request.query):
+            response_text = build_document_inventory_response()
+            save_result = database.salvar_mensagem(
+                request.user_id,
+                request.query,
+                response_text,
+                session_id=request.session_id,
+            )
+            return {"response": response_text, "session_id": save_result.get("session_id")}
+
         engine = ensure_chat_engine()
         try:
             response = engine.chat(request.query)
@@ -570,6 +633,8 @@ def chat_endpoint(request: ChatRequest):
         )
         
         return {"response": response_text, "session_id": save_result.get("session_id")}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Erro na geração da resposta: {e}")
         raise HTTPException(status_code=500, detail="Ocorreu um erro interno ao processar sua pergunta.")
@@ -590,6 +655,20 @@ def chat_stream_endpoint(request: ChatRequest):
     def stream_response():
         global chat_engine
         try:
+            if is_document_inventory_query(request.query):
+                response_text = build_document_inventory_response()
+                save_result = database.salvar_mensagem(
+                    request.user_id,
+                    request.query,
+                    response_text,
+                    session_id=request.session_id,
+                )
+                for index in range(0, len(response_text), 8):
+                    yield emit_event({"type": "chunk", "text": response_text[index:index + 8]})
+                    time.sleep(0.055)
+                yield emit_event({"type": "done", "session_id": save_result.get("session_id")})
+                return
+
             engine = ensure_chat_engine()
             try:
                 response = engine.chat(request.query)
@@ -614,6 +693,8 @@ def chat_stream_endpoint(request: ChatRequest):
                 time.sleep(0.055)
 
             yield emit_event({"type": "done", "session_id": save_result.get("session_id")})
+        except HTTPException as e:
+            yield emit_event({"type": "error", "message": e.detail})
         except Exception as e:
             print(f"Erro na geração da resposta em streaming: {e}")
             yield emit_event({"type": "error", "message": "Ocorreu um erro interno ao processar sua pergunta."})
@@ -741,6 +822,15 @@ def resolve_data_file(filename: str):
     if not str(file_path).startswith(str(data_root)) or not file_path.exists():
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     return safe_filename, file_path
+
+
+def safe_managed_path(root: Path, filename: str) -> Path:
+    safe_filename = os.path.basename(filename)
+    file_path = (root / safe_filename).resolve()
+    root_path = root.resolve()
+    if not str(file_path).startswith(str(root_path)):
+        raise HTTPException(status_code=400, detail="Nome de arquivo invalido")
+    return file_path
 
 def resolve_pending_file(filename: str):
     """Resolve com segurança o caminho de um arquivo dentro de data/."""
@@ -1129,7 +1219,7 @@ def list_docs(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")
     database.sync_documents_from_disk(DATA_DIR, load_docs_metadata())
     user = database.obter_usuario(x_user_id) if x_user_id else None
     if user and user.get("status") == "active" and user.get("role") in {"admin", "editor"}:
-        files = database.listar_documentos()
+        files = database.listar_documentos(status="aprovado")
         for doc in files:
             doc["history"] = database.listar_eventos_documento(doc["id"])
     else:
@@ -1236,7 +1326,7 @@ def approve_submission(document_id: int, background_tasks: BackgroundTasks = Non
 
 
 @app.post("/api/submissions/{document_id}/reject")
-def reject_submission(document_id: int, request: RejectDocumentRequest, admin_user=Depends(require_admin)):
+def reject_submission(document_id: int, request: RejectDocumentRequest, background_tasks: BackgroundTasks, admin_user=Depends(require_admin)):
     doc = database.obter_documento_por_id(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Documento nÃ£o encontrado")
@@ -1246,6 +1336,17 @@ def reject_submission(document_id: int, request: RejectDocumentRequest, admin_us
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
     database.registrar_evento_documento(document_id, "reprovado", "reprovado", request.feedback, admin_user["id"])
+    data_path = safe_managed_path(DATA_DIR, doc["filename"])
+    if data_path.exists():
+        data_path.unlink()
+    meta = load_docs_metadata()
+    if doc["filename"] in meta:
+        del meta[doc["filename"]]
+        save_docs_metadata(meta)
+    if background_tasks is not None:
+        background_tasks.add_task(rebuild_index)
+    else:
+        rebuild_index()
     return {"message": "Documento reprovado", "document": result["document"]}
 
 
@@ -1851,16 +1952,34 @@ def toggle_file(filename: str, background_tasks: BackgroundTasks = None, admin_u
 
 @app.delete("/api/docs/{filename}")
 def delete_file(filename: str, background_tasks: BackgroundTasks = None, admin_user=Depends(require_pdf_manager)):
+    safe_filename = os.path.basename(filename)
+    doc = database.obter_documento(safe_filename)
+
     try:
-        safe_filename, file_path = resolve_data_file(filename)
-    except HTTPException:
-        safe_filename, file_path = resolve_pending_file(filename)
-        
-    try:
-        doc = database.obter_documento(safe_filename)
         if doc:
             database.registrar_evento_documento(doc["id"], "excluido", doc.get("status"), "PDF removido de Gerenciamento de PDFs.", admin_user["id"])
-        file_path.unlink()
+
+        files_to_delete = []
+        if doc:
+            names_by_root = [
+                (DATA_DIR, doc["filename"]),
+                (RAW_UPLOADS_DIR, doc.get("raw_filename") or doc["filename"]),
+                (PROCESSED_UPLOADS_DIR, doc.get("processed_filename") or doc["filename"]),
+            ]
+            for root, managed_name in names_by_root:
+                path = safe_managed_path(root, managed_name)
+                if path.exists():
+                    files_to_delete.append(path)
+        else:
+            try:
+                _, file_path = resolve_data_file(filename)
+            except HTTPException:
+                _, file_path = resolve_pending_file(filename)
+            files_to_delete.append(file_path)
+
+        for path in dict.fromkeys(files_to_delete):
+            path.unlink()
+
         database.deletar_documento(safe_filename)
         meta = load_docs_metadata()
         if safe_filename in meta:
