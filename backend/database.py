@@ -1621,13 +1621,13 @@ def obter_mensagens_chat_session(user_id: int, session_id: int) -> List[Dict[str
 
         messages = []
         for row in rows:
-            messages.append({
+            user_msg = {
                 "id": f"{row[0]}-user",
                 "chat_id": row[0],
                 "role": "user",
                 "text": row[1],
                 "created_at": row[3],
-            })
+            }
             assistant_msg = {
                 "id": f"{row[0]}-assistant",
                 "chat_id": row[0],
@@ -1640,9 +1640,14 @@ def obter_mensagens_chat_session(user_id: int, session_id: int) -> List[Dict[str
                 try:
                     extras = json.loads(raw_metadata)
                     if isinstance(extras, dict):
+                        # Campos que pertencem à bolha do usuário (ex.: chip do nome do arquivo).
+                        user_file_name = extras.pop("userFileName", None)
+                        if user_file_name:
+                            user_msg["fileName"] = user_file_name
                         assistant_msg.update(extras)
                 except (ValueError, TypeError):
                     pass
+            messages.append(user_msg)
             messages.append(assistant_msg)
         return messages
     except Exception as e:
@@ -1689,7 +1694,7 @@ def salvar_mensagem(user_id: int, message: str, response: str, session_id: Optio
             session_id = cursor.lastrowid
             created_session = True
 
-        metadata_json = json.dumps(metadata) if metadata else None
+        metadata_json = json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None
         cursor.execute(
             """INSERT INTO chat_history (session_id, user_id, message, response, created_at, metadata)
                VALUES (?, ?, ?, ?, ?, ?)""",

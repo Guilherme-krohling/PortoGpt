@@ -14,7 +14,7 @@ import subprocess
 import sys
 import json as json_module
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from jinja2 import Environment, BaseLoader, Undefined
 from groq import Groq as GroqDirect
 
@@ -1198,16 +1198,23 @@ def upload_endpoint(
             if is_auto_approved
             else f"Documento {file.filename} enviado para templatização e aprovação do administrador."
         )
-        chat_session_id = session_id
-        if message is not None:
-            user_message = message.strip() or f"Enviei o PDF {file.filename}."
-            save_result = database.salvar_mensagem(
-                user["id"],
-                f"{user_message}\n\n[PDF enviado: {file.filename}]",
-                response,
-                session_id=session_id,
-            )
-            chat_session_id = save_result.get("session_id")
+        # Sempre persistir a interação do upload com os metadados que reconstroem
+        # a bolha no reload: chip do nome do arquivo (userFileName) e a prévia do
+        # PDF formatado (previewDocumentId/previewLabel).
+        user_message = (message or "").strip() or f"Enviei o PDF {file.filename}."
+        upload_metadata = {
+            "userFileName": file.filename,
+            "previewDocumentId": document["id"],
+            "previewLabel": "Prévia do PDF formatado",
+        }
+        save_result = database.salvar_mensagem(
+            user["id"],
+            user_message,
+            response,
+            session_id=session_id,
+            metadata=upload_metadata,
+        )
+        chat_session_id = save_result.get("session_id")
 
         # Extrai texto do PDF para uso imediato no chat (aplicar template)
         pdf_text_for_chat = ""
@@ -1972,6 +1979,52 @@ def toggle_file(filename: str, background_tasks: BackgroundTasks = None, admin_u
         raise HTTPException(status_code=500, detail="Erro ao alternar arquivo")
 
 
+def _remover_arquivos_do_documento(doc: Dict[str, Any]) -> List[Path]:
+    """Remove todas as cópias físicas de um documento.
+
+    Cobre as quatro pastas usadas no ciclo de vida do PDF
+    (data/, raw_uploads/, pending_uploads/, processed_uploads/) e também o HTML
+    gerado pelo template (Jinja), que compartilha o mesmo stem com sufixo .html.
+    Usa sempre os nomes exatos do registro + os.path.basename, evitando apagar
+    arquivo de outro documento. Retorna a lista de caminhos efetivamente removidos.
+    """
+    filename = doc.get("filename") or ""
+    raw_filename = doc.get("raw_filename") or filename
+    processed_filename = doc.get("processed_filename") or filename
+    stem = Path(filename).stem
+
+    candidatos = [
+        (DATA_DIR, filename),
+        (RAW_UPLOADS_DIR, raw_filename),
+        (PENDING_UPLOADS_DIR, raw_filename),
+        (PROCESSED_UPLOADS_DIR, processed_filename),
+        (PROCESSED_UPLOADS_DIR, filename),
+        (PROCESSED_UPLOADS_DIR, f"{stem}.html") if stem else None,
+    ]
+
+    caminhos = []
+    for item in candidatos:
+        if not item:
+            continue
+        root, managed_name = item
+        if not managed_name:
+            continue
+        try:
+            caminhos.append(safe_managed_path(root, managed_name))
+        except HTTPException:
+            continue
+
+    removidos = []
+    for path in dict.fromkeys(caminhos):
+        try:
+            if path.exists():
+                path.unlink()
+                removidos.append(path)
+        except OSError as exc:
+            print(f"[delete] Falha ao remover {path}: {exc}")
+    return removidos
+
+
 @app.delete("/api/docs/{filename}")
 def delete_file(filename: str, background_tasks: BackgroundTasks = None, admin_user=Depends(require_pdf_manager)):
     safe_filename = os.path.basename(filename)
@@ -1980,27 +2033,14 @@ def delete_file(filename: str, background_tasks: BackgroundTasks = None, admin_u
     try:
         if doc:
             database.registrar_evento_documento(doc["id"], "excluido", doc.get("status"), "PDF removido de Gerenciamento de PDFs.", admin_user["id"])
-
-        files_to_delete = []
-        if doc:
-            names_by_root = [
-                (DATA_DIR, doc["filename"]),
-                (RAW_UPLOADS_DIR, doc.get("raw_filename") or doc["filename"]),
-                (PROCESSED_UPLOADS_DIR, doc.get("processed_filename") or doc["filename"]),
-            ]
-            for root, managed_name in names_by_root:
-                path = safe_managed_path(root, managed_name)
-                if path.exists():
-                    files_to_delete.append(path)
+            _remover_arquivos_do_documento(doc)
         else:
             try:
                 _, file_path = resolve_data_file(filename)
             except HTTPException:
                 _, file_path = resolve_pending_file(filename)
-            files_to_delete.append(file_path)
-
-        for path in dict.fromkeys(files_to_delete):
-            path.unlink()
+            if file_path.exists():
+                file_path.unlink()
 
         database.deletar_documento(safe_filename)
         meta = load_docs_metadata()

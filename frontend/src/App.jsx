@@ -890,7 +890,13 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     apiRequest(`/chat/sessions/${sessionId}/messages?user_id=${currentUser.id}`)
       .then((payload) => {
         if (!active) return
-        setMessages(payload.messages || [])
+        // Reconstrói a prévia do PDF formatado a partir do id salvo no metadata.
+        const restored = (payload.messages || []).map((m) =>
+          m.previewDocumentId && !m.previewUrl
+            ? { ...m, previewUrl: buildSubmissionUrl(m.previewDocumentId, 'processed', currentUser.id) }
+            : m,
+        )
+        setMessages(restored)
       })
       .catch((err) => {
         if (!active) return
@@ -951,7 +957,9 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
           setCurrentSessionId(saveRes.session_id)
           onSessionChange?.(saveRes.session_id)
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error('Falha ao salvar o resultado do template no histórico:', e)
+      }
 
       setMessages((prev) => [
         ...prev,
@@ -1094,7 +1102,9 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
             setCurrentSessionId(saveRes.session_id)
             onSessionChange?.(saveRes.session_id)
           }
-        } catch (e) { }
+        } catch (e) {
+          console.error('Falha ao salvar a mensagem no histórico:', e)
+        }
         setMessages((prev) => [...prev, { role: 'assistant', text: assistantText }])
       } else {
         const assistantText = 'Escolha o template desejado e selecione o PDF a formatar:'
@@ -1110,7 +1120,9 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
             setCurrentSessionId(saveRes.session_id)
             onSessionChange?.(saveRes.session_id)
           }
-        } catch (e) { }
+        } catch (e) {
+          console.error('Falha ao salvar a seleção de template no histórico:', e)
+        }
         setMessages((prev) => [
           ...prev,
           {
