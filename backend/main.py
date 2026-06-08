@@ -234,6 +234,7 @@ def build_system_prompt():
     rules = []
     if settings.get("strict_documents_only", True):
         rules.append("Responda somente com base nos documentos indexados e no contexto recuperado.")
+        rules.append("Se os documentos não contiverem a resposta, confirme que a informação não está disponível nos documentos e não use conhecimento externo.")
     if settings.get("answer_unknown_when_missing", True):
         rules.append("Quando a informação não estiver nos documentos, diga isso claramente e não invente dados.")
     if settings.get("ask_clarifying_questions", True):
@@ -249,6 +250,23 @@ def build_system_prompt():
     rules_text = "\n".join(f"- {rule}" for rule in rules)
 
     return f"{SYSTEM_PROMPT}\n\nPARÂMETROS ADMINISTRATIVOS ATUAIS:\n{rules_text}\n"
+
+
+def build_no_context_query(original_query: str) -> str:
+    return (
+        f"{original_query}\n\n"
+        "Se você não encontrou informação suficiente nos documentos indexados para responder a essa pergunta, "
+        "formule uma resposta em Português do Brasil, profissional e direta, explicando claramente que a informação "
+        "não está disponível nos documentos ativos. Não use conhecimento externo ou fatos fora do contexto dos documentos. "
+        "Oriente o usuário a verificar se o documento relevante está publicado e ativo na base ou a reformular a pergunta."
+    )
+
+
+def response_has_document_context(response) -> bool:
+    source_nodes = getattr(response, "source_nodes", None)
+    if isinstance(source_nodes, list) and len(source_nodes) > 0:
+        return True
+    return False
 
 
 def carregar_chat_engine():
@@ -623,6 +641,9 @@ def chat_endpoint(request: ChatRequest):
             chat_engine = None
             rebuild_index()
             response = ensure_chat_engine().chat(request.query)
+
+        if not response_has_document_context(response):
+            response = engine.chat(build_no_context_query(request.query))
         response_text = str(response)
         
         # Salvar no banco de dados
@@ -681,7 +702,10 @@ def chat_stream_endpoint(request: ChatRequest):
                 rebuild_index()
                 response = ensure_chat_engine().chat(request.query)
 
+            if not response_has_document_context(response):
+                response = engine.chat(build_no_context_query(request.query))
             response_text = str(response)
+
             save_result = database.salvar_mensagem(
                 request.user_id,
                 request.query,
