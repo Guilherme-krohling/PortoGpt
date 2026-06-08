@@ -1154,7 +1154,6 @@ def register_saved_template(filename: str, original_name: str, file_path: Path, 
 
 @app.post("/api/upload")
 def upload_endpoint(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     template_filename: Optional[str] = Form(default=None),
     message: Optional[str] = Form(default=None),
@@ -1215,7 +1214,7 @@ def upload_endpoint(
 
         if is_auto_approved:
             try:
-                background_tasks.add_task(rebuild_index, file_paths=[str(dest_path)])
+                rebuild_index(file_paths=[str(dest_path)])
             except Exception as e:
                 print('Erro ao agendar reindex:', e)
         response = (
