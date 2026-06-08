@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
   AlertCircle,
@@ -769,6 +769,67 @@ function TopBar({
 
 const TEMPLATE_INTENT_RE = /template|aplicar\s+template|colocar\s+no\s+template|encaixar\s+no\s+template|usar\s+template|formatar\s+com\s+template|gerar\s+com\s+template|quero\s+template/i
 
+const ChatMessage = memo(({ message, loading, onApplyTemplate, onViewTemplateResult }) => {
+  return (
+    <div className={`message-row ${message.role}`}>
+      <div className="message-content">
+        <div className="message-text">
+          {message.role === 'assistant' ? <ReactMarkdown>{message.text}</ReactMarkdown> : message.text}
+          {message.fileName && (
+            <div className="attached-file-chip">
+              <FileText size={15} />
+              {message.fileName}
+            </div>
+          )}
+          {message.previewUrl && (
+            <PdfPreview url={message.previewUrl} label={message.previewLabel || 'Prévia do PDF'} />
+          )}
+          {message.templateSelect && (
+            <div className="template-select-buttons">
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 8px 0' }}>
+                Clique no template e selecione o PDF a formatar:
+              </p>
+              {message.templateSelect.templates.map((tpl) => (
+                <button
+                  key={tpl.filename}
+                  className="template-select-btn"
+                  disabled={loading}
+                  onClick={() => {
+                    const input = document.createElement('input')
+                    input.type = 'file'
+                    input.accept = '.pdf'
+                    input.onchange = (e) => {
+                      const f = e.target.files?.[0]
+                      if (f && onApplyTemplate) onApplyTemplate(tpl, f)
+                    }
+                    input.click()
+                  }}
+                >
+                  <LayoutTemplate size={15} />
+                  {tpl.title || tpl.filename}
+                </button>
+              ))}
+            </div>
+          )}
+          {message.templateResult && (
+            <button
+              className="primary-btn template-result-btn"
+              onClick={() => {
+                if (onViewTemplateResult) {
+                  onViewTemplateResult(message.templateResult.html, message.templateResult.title)
+                }
+              }}
+            >
+              <Eye size={15} />
+              Visualizar documento formatado
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}, (prev, next) => prev.message === next.message && prev.loading === next.loading)
+
 function ChatPage({ currentUser, onSessionChange, sessionId }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -790,13 +851,13 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
       {
         id: 'sug-recent',
         title: 'Documento publicado recentemente',
-        subtitle: 'Carregando⬦',
+        subtitle: 'Carregando...',
         prompt: 'Liste os documentos mais recentes (se possível) e sugira por onde começar.',
       },
       {
         id: 'sug-top-week',
         title: 'Mais perguntado essa semana',
-        subtitle: 'Carregando⬦',
+        subtitle: 'Carregando...',
         prompt: 'Qual tem sido o tema mais perguntado esta semana? Resuma e aponte trechos relevantes.',
       },
       {
@@ -858,7 +919,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
               return { ...tile, subtitle: 'Sem dados suficientes', prompt: 'Me sugira 3 perguntas úteis com base nos documentos ativos para eu começar.' }
             }
             const question = String(topQuestion.message)
-            const short = question.length > 44 ? `${question.slice(0, 44).trim()}⬦` : question
+            const short = question.length > 44 ? `${question.slice(0, 44).trim()}...` : question
             return { ...tile, subtitle: short, prompt: question }
           }
 
@@ -891,12 +952,12 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
       .then((payload) => {
         if (!active) return
         // Reconstrói a prévia do PDF formatado a partir do id salvo no metadata.
-        // const restored = (payload.messages || []).map((m) =>
-        //   m.previewDocumentId && !m.previewUrl
-        //     ? { ...m, previewUrl: buildSubmissionUrl(m.previewDocumentId, 'processed', currentUser.id) }
-        //     : m,
-        // )
-        setMessages(payload.messages)
+        const restored = (payload.messages || []).map((m) =>
+          m.previewDocumentId && !m.previewUrl
+            ? { ...m, previewUrl: buildSubmissionUrl(m.previewDocumentId, 'processed', currentUser.id) }
+            : m,
+        )
+        setMessages(restored)
       })
       .catch((err) => {
         if (!active) return
@@ -921,7 +982,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     setLoading(true)
     setMessages((prev) => [...prev, {
       role: 'assistant',
-      text: `Aplicando o template **${template.title || template.filename}** ao arquivo **${file.name}**⬦`,
+      text: `Aplicando o template **${template.title || template.filename}** ao arquivo **${file.name}**`,
     }])
     try {
       const formData = new FormData()
@@ -1194,61 +1255,16 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
         ) : (
           <div className="messages-container">
             {messages.map((message, index) => (
-              <div key={`${message.role}-${index}`} className={`message-row ${message.role}`}>
-                <div className="message-content">
-                  <div className="message-text">
-                    {message.role === 'assistant' ? <ReactMarkdown>{message.text}</ReactMarkdown> : message.text}
-                    {message.fileName && (
-                      <div className="attached-file-chip">
-                        <FileText size={15} />
-                        {message.fileName}
-                      </div>
-                    )}
-                    {message.previewUrl && (
-                      <PdfPreview url={message.previewUrl} label={message.previewLabel || 'Prévia do PDF'} />
-                    )}
-                    {message.templateSelect && (
-                      <div className="template-select-buttons">
-                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 8px 0' }}>
-                          Clique no template e selecione o PDF a formatar:
-                        </p>
-                        {message.templateSelect.templates.map((tpl) => (
-                          <button
-                            key={tpl.filename}
-                            className="template-select-btn"
-                            disabled={loading}
-                            onClick={() => {
-                              const input = document.createElement('input')
-                              input.type = 'file'
-                              input.accept = '.pdf'
-                              input.onchange = (e) => {
-                                const f = e.target.files?.[0]
-                                if (f) applyTemplateWithFile(tpl, f)
-                              }
-                              input.click()
-                            }}
-                          >
-                            <LayoutTemplate size={15} />
-                            {tpl.title || tpl.filename}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {message.templateResult && (
-                      <button
-                        className="primary-btn template-result-btn"
-                        onClick={() => {
-                          setTemplateViewerHtml(message.templateResult.html)
-                          setTemplateViewerTitle(message.templateResult.title)
-                        }}
-                      >
-                        <Eye size={15} />
-                        Visualizar documento formatado
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <ChatMessage
+                key={`${message.role}-${index}`}
+                message={message}
+                loading={loading}
+                onApplyTemplate={applyTemplateWithFile}
+                onViewTemplateResult={(html, title) => {
+                  setTemplateViewerHtml(html)
+                  setTemplateViewerTitle(title)
+                }}
+              />
             ))}
             {loading && messages[messages.length - 1]?.role !== 'assistant' && (
               <div className="message-row assistant">
@@ -2682,6 +2698,7 @@ function SubmissionFilters({ search, dateFilter, statusFilter, onSearchChange, o
         <label className="date-filter-field status-filter-field">
           <Filter size={17} />
           <select
+            className="select-control status-select"
             value={statusFilter}
             onChange={(event) => onStatusChange(event.target.value)}
             aria-label="Filtrar por status"
@@ -3667,7 +3684,7 @@ function HtmlDocViewer({ html, title, onClose }) {
         </div>
         <button className="ghost-btn" onClick={handleDownloadPdf} disabled={downloading} title="Baixar como PDF">
           <Download size={16} />
-          {downloading ? 'Gerando PDF⬦' : 'Baixar PDF'}
+          {downloading ? 'Gerando PDF...' : 'Baixar PDF'}
         </button>
       </div>
       {downloadError && (
@@ -4171,17 +4188,38 @@ function RejectReasonModal({ onClose, onConfirm, submission }) {
 }
 
 function PdfPreview({ label, url }) {
+  const [isOpen, setIsOpen] = useState(false)
+
   return (
     <div className="pdf-preview">
       <div className="pdf-preview-head">
         <FileText size={16} />
         <strong>{label}</strong>
-        <a href={url} target="_blank" rel="noreferrer">
-          <Eye size={15} />
-          Abrir em nova aba
-        </a>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <button 
+            type="button" 
+            onClick={() => setIsOpen(!isOpen)} 
+            style={{
+              background: 'none',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              padding: '4px 10px',
+              cursor: 'pointer',
+              color: 'var(--text-muted)',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center'
+            }}
+          >
+            {isOpen ? 'Ocultar PDF' : 'Carregar PDF'}
+          </button>
+          <a href={url} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+            <Eye size={15} />
+            Abrir em nova aba
+          </a>
+        </div>
       </div>
-      <iframe src={url} title={label} className="pdf-preview-iframe" />
+      {isOpen && <iframe src={url} title={label} className="pdf-preview-iframe" />}
     </div>
   )
 }

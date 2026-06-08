@@ -180,16 +180,16 @@ class ApplyTemplateRequest(BaseModel):
 
 
 def require_active_user(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
-    """Valida usuario autenticado e ativo."""
+    """Valida usuário autenticado e ativo."""
     if x_user_id is None:
-        raise HTTPException(status_code=401, detail="Usuario nao autenticado")
+        raise HTTPException(status_code=401, detail="Usuário não autenticado")
 
     user = database.obter_usuario(x_user_id)
     if user is None:
-        raise HTTPException(status_code=401, detail="Usuario nao encontrado")
+        raise HTTPException(status_code=401, detail="Usuário não encontrado")
 
     if user.get("status") != "active":
-        raise HTTPException(status_code=403, detail="Usuario inativo ou pendente")
+        raise HTTPException(status_code=403, detail="Usuário inativo ou pendente")
 
     return user
 
@@ -213,7 +213,7 @@ def require_admin(x_user_id: Optional[int] = Header(default=None, alias="X-User-
 
 
 def require_pdf_manager(x_user_id: Optional[int] = Header(default=None, alias="X-User-Id")):
-    """Valida se o usuario atual pode gerenciar PDFs."""
+    """Valida se o usuário atual pode gerenciar PDFs."""
     user = require_active_user(x_user_id)
 
     if user.get("role") not in {"admin", "editor"}:
@@ -289,7 +289,7 @@ def carregar_chat_engine():
             reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=3)
         except Exception as e:
             reranker = None
-            print(f"Reranker indisponivel; seguindo sem rerank: {e}")
+            print(f"Reranker indisponível; seguindo sem rerank: {e}")
     if reranker is not None:
         node_postprocessors.append(reranker)
 
@@ -400,7 +400,7 @@ def build_document_inventory_response() -> str:
     if not docs:
         return (
             "## Resultado\n\n"
-            "No momento, nao ha documentos aprovados e ativos disponiveis para consulta."
+            "No momento, não há documentos aprovados e ativos disponíveis para consulta."
         )
 
     lines = [
@@ -685,9 +685,9 @@ def chat_stream_endpoint(request: ChatRequest):
                     response_text,
                     session_id=request.session_id,
                 )
-                for index in range(0, len(response_text), 8):
-                    yield emit_event({"type": "chunk", "text": response_text[index:index + 8]})
-                    time.sleep(0.055)
+                for index in range(0, len(response_text), 40):
+                    yield emit_event({"type": "chunk", "text": response_text[index:index + 40]})
+                    time.sleep(0.01)
                 yield emit_event({"type": "done", "session_id": save_result.get("session_id")})
                 return
 
@@ -1154,6 +1154,7 @@ def register_saved_template(filename: str, original_name: str, file_path: Path, 
 
 @app.post("/api/upload")
 def upload_endpoint(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     template_filename: Optional[str] = Form(default=None),
     message: Optional[str] = Form(default=None),
@@ -1210,11 +1211,11 @@ def upload_endpoint(
                 raise HTTPException(status_code=500, detail=result["message"])
             document = result["document"]
             database.registrar_evento_documento(document["id"], "enviado", "pendente", "Documento enviado pelo chat e encaminhado para aprovação.", user["id"])
-            database.registrar_evento_documento(document["id"], "processado", "pendente", "Previa formatada gerada pela etapa de templatização.", user["id"])
+            database.registrar_evento_documento(document["id"], "processado", "pendente", "Prévia formatada gerada pela etapa de templatização.", user["id"])
 
         if is_auto_approved:
             try:
-                rebuild_index(file_paths=[str(dest_path)])
+                background_tasks.add_task(rebuild_index, file_paths=[str(dest_path)])
             except Exception as e:
                 print('Erro ao agendar reindex:', e)
         response = (
@@ -1435,8 +1436,8 @@ def resubmit_submission(
     )
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
-    database.registrar_evento_documento(document_id, "reenviado", "pendente", "Usuario reenviou a solicitacao para nova analise.", current_user["id"])
-    database.registrar_evento_documento(document_id, "processado", "pendente", "Nova previa formatada gerada pela etapa de templatizacao.", current_user["id"])
+    database.registrar_evento_documento(document_id, "reenviado", "pendente", "Usuário reenviou a solicitação para nova análise.", current_user["id"])
+    database.registrar_evento_documento(document_id, "processado", "pendente", "Nova prévia formatada gerada pela etapa de templatização.", current_user["id"])
     return {"message": "Solicitação reenviada para aprovação", "document": result["document"]}
 
 
