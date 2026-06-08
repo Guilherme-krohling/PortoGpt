@@ -2698,6 +2698,7 @@ function SubmissionFilters({ search, dateFilter, statusFilter, onSearchChange, o
         <label className="date-filter-field status-filter-field">
           <Filter size={17} />
           <select
+            className="select-control status-select"
             value={statusFilter}
             onChange={(event) => onStatusChange(event.target.value)}
             aria-label="Filtrar por status"
