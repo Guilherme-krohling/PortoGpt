@@ -1220,7 +1220,7 @@ def upload_endpoint(
         response = (
             f"Upload de {file.filename} aprovado automaticamente."
             if is_auto_approved
-            else f"Documento {file.filename} enviado para templatização e aprovação do administrador."
+            else f"Documento {file.filename} enviado a aprovação do administrador."
         )
         # Sempre persistir a interação do upload com os metadados que reconstroem
         # a bolha no reload: chip do nome do arquivo (userFileName) e a prévia do
