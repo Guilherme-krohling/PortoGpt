@@ -891,12 +891,12 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
       .then((payload) => {
         if (!active) return
         // Reconstrói a prévia do PDF formatado a partir do id salvo no metadata.
-        const restored = (payload.messages || []).map((m) =>
-          m.previewDocumentId && !m.previewUrl
-            ? { ...m, previewUrl: buildSubmissionUrl(m.previewDocumentId, 'processed', currentUser.id) }
-            : m,
-        )
-        setMessages(restored)
+        // const restored = (payload.messages || []).map((m) =>
+        //   m.previewDocumentId && !m.previewUrl
+        //     ? { ...m, previewUrl: buildSubmissionUrl(m.previewDocumentId, 'processed', currentUser.id) }
+        //     : m,
+        // )
+        setMessages(payload.messages)
       })
       .catch((err) => {
         if (!active) return
