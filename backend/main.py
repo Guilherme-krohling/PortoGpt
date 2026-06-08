@@ -641,9 +641,14 @@ def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail="Ocorreu um erro interno ao processar sua pergunta.")
 
 
+# Tamanho do bloco enviado por evento no streaming. Blocos maiores reduzem o
+# numero de eventos e de re-renderizacoes no frontend (sem atraso artificial).
+CHUNK_SIZE = 40
+
+
 @app.post("/api/chat/stream")
 def chat_stream_endpoint(request: ChatRequest):
-    """Gera resposta e envia o texto em pequenos blocos para efeito de streaming."""
+    """Gera resposta e envia o texto em blocos para efeito de streaming."""
     global chat_engine
 
     user = database.obter_usuario(request.user_id)
@@ -664,9 +669,8 @@ def chat_stream_endpoint(request: ChatRequest):
                     response_text,
                     session_id=request.session_id,
                 )
-                for index in range(0, len(response_text), 8):
-                    yield emit_event({"type": "chunk", "text": response_text[index:index + 8]})
-                    time.sleep(0.055)
+                for index in range(0, len(response_text), CHUNK_SIZE):
+                    yield emit_event({"type": "chunk", "text": response_text[index:index + CHUNK_SIZE]})
                 yield emit_event({"type": "done", "session_id": save_result.get("session_id")})
                 return
 
@@ -689,9 +693,8 @@ def chat_stream_endpoint(request: ChatRequest):
                 session_id=request.session_id,
             )
 
-            for index in range(0, len(response_text), 8):
-                yield emit_event({"type": "chunk", "text": response_text[index:index + 8]})
-                time.sleep(0.055)
+            for index in range(0, len(response_text), CHUNK_SIZE):
+                yield emit_event({"type": "chunk", "text": response_text[index:index + CHUNK_SIZE]})
 
             yield emit_event({"type": "done", "session_id": save_result.get("session_id")})
         except HTTPException as e:
