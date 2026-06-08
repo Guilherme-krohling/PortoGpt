@@ -851,13 +851,13 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
       {
         id: 'sug-recent',
         title: 'Documento publicado recentemente',
-        subtitle: 'Carregando⬦',
+        subtitle: 'Carregando...',
         prompt: 'Liste os documentos mais recentes (se possível) e sugira por onde começar.',
       },
       {
         id: 'sug-top-week',
         title: 'Mais perguntado essa semana',
-        subtitle: 'Carregando⬦',
+        subtitle: 'Carregando...',
         prompt: 'Qual tem sido o tema mais perguntado esta semana? Resuma e aponte trechos relevantes.',
       },
       {
@@ -919,7 +919,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
               return { ...tile, subtitle: 'Sem dados suficientes', prompt: 'Me sugira 3 perguntas úteis com base nos documentos ativos para eu começar.' }
             }
             const question = String(topQuestion.message)
-            const short = question.length > 44 ? `${question.slice(0, 44).trim()}⬦` : question
+            const short = question.length > 44 ? `${question.slice(0, 44).trim()}...` : question
             return { ...tile, subtitle: short, prompt: question }
           }
 
@@ -982,7 +982,7 @@ function ChatPage({ currentUser, onSessionChange, sessionId }) {
     setLoading(true)
     setMessages((prev) => [...prev, {
       role: 'assistant',
-      text: `Aplicando o template **${template.title || template.filename}** ao arquivo **${file.name}**⬦`,
+      text: `Aplicando o template **${template.title || template.filename}** ao arquivo **${file.name}**`,
     }])
     try {
       const formData = new FormData()
@@ -3684,7 +3684,7 @@ function HtmlDocViewer({ html, title, onClose }) {
         </div>
         <button className="ghost-btn" onClick={handleDownloadPdf} disabled={downloading} title="Baixar como PDF">
           <Download size={16} />
-          {downloading ? 'Gerando PDF⬦' : 'Baixar PDF'}
+          {downloading ? 'Gerando PDF...' : 'Baixar PDF'}
         </button>
       </div>
       {downloadError && (
