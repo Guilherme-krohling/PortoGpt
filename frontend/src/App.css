@@ -183,6 +183,8 @@ textarea:focus-visible {
 .sidebar {
   position: relative;
   width: 316px;
+  height: 100vh;
+  height: 100dvh;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -3829,6 +3831,48 @@ button:disabled {
 
   .pdf-toolbar {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Telas baixas (notebooks, escala 125-150% do Windows): comprime o topo fixo
+   da sidebar para sobrar espaco util ao historico de conversas. */
+@media (max-height: 820px) {
+  .sidebar {
+    gap: 8px;
+    padding: 12px 12px;
+  }
+
+  .sidebar-top {
+    gap: 8px;
+  }
+
+  .sidebar .brand-lockup {
+    padding: 0 6px;
+  }
+
+  .new-chat-btn,
+  .search-chat-btn,
+  .sidebar-nav-btn,
+  .chat-search-field {
+    min-height: 36px;
+  }
+
+  .history-panel {
+    gap: 6px;
+  }
+}
+
+@media (max-height: 640px) {
+  .sidebar {
+    gap: 6px;
+    padding: 10px 12px;
+  }
+
+  .new-chat-btn,
+  .search-chat-btn,
+  .sidebar-nav-btn,
+  .chat-search-field {
+    min-height: 32px;
   }
 }
 
