@@ -664,9 +664,9 @@ def chat_stream_endpoint(request: ChatRequest):
                     response_text,
                     session_id=request.session_id,
                 )
-                for index in range(0, len(response_text), 8):
-                    yield emit_event({"type": "chunk", "text": response_text[index:index + 8]})
-                    time.sleep(0.055)
+                for index in range(0, len(response_text), 40):
+                    yield emit_event({"type": "chunk", "text": response_text[index:index + 40]})
+                    time.sleep(0.01)
                 yield emit_event({"type": "done", "session_id": save_result.get("session_id")})
                 return
 
@@ -1130,6 +1130,7 @@ def register_saved_template(filename: str, original_name: str, file_path: Path, 
 
 @app.post("/api/upload")
 def upload_endpoint(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     template_filename: Optional[str] = Form(default=None),
     message: Optional[str] = Form(default=None),
@@ -1190,7 +1191,7 @@ def upload_endpoint(
 
         if is_auto_approved:
             try:
-                rebuild_index(file_paths=[str(dest_path)])
+                background_tasks.add_task(rebuild_index, file_paths=[str(dest_path)])
             except Exception as e:
                 print('Erro ao agendar reindex:', e)
         response = (
