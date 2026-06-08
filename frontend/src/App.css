@@ -587,7 +587,7 @@ textarea:focus-visible {
   overflow-y: auto;
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 0.1em;
   padding-right: 4px;
   scroll-behavior: smooth;
   scrollbar-width: thin;
@@ -627,6 +627,7 @@ textarea:focus-visible {
   -webkit-backdrop-filter: blur(32px) saturate(160%);
   animation: glass-rise 0.36s ease both;
   animation-delay: calc(var(--item-index, 0) * 36ms);
+  height: 3em;
 }
 
 .history-item:hover,
